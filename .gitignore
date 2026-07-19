@@ -1,0 +1,32 @@
+# ===== 编译产物 / 可执行文件 =====
+# 各项目 gcc -o 生成的可执行文件
+05_mysql/mysql
+05_mysql/mysql_image
+04_threadpool/threadpool
+02_contacts/contacts
+02_contacts/contacts01
+03_thread_count/lock
+01_countword/count
+
+# 通用编译中间产物与可执行文件
+*.o
+*.obj
+*.out
+*.exe
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+
+# ===== IDE 配置 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini
