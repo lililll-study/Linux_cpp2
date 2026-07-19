@@ -1,0 +1,9 @@
+git status
+git log
+git add .
+git commit -m "修改MCP"
+git checkout -b ragas
+
+git branch -a
+git remote -v
+git push -u origin mcp/server
