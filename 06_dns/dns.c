@@ -13,6 +13,25 @@
 // struct dns_question *question, 
 // char *request
 int dns_build_requestion(struct dns_hearder *header, struct dns_question *question, char *request) {
+    
+    if (header == NULL || question == NULL || request == NULL) return -1;
+    memset(request, 0, rlen);
+
+    // header --> request
+
+    memcpy(request, header, sizeof(struct dns_header));
+    int offset = sizeof(struct dns_header);
+
+    // question --> request
+    memcpy(request+offset, question->name, question->length);
+    offset += question->length;
+
+    memcpy(request+offset, question->qtype, sizeof(question->qtype));
+    offset += sizeof(question->qtype);
+
+    memcpy(request+offset, question->qclass, sizeof(question->qclass));
+    offset += sizeof(question->qclass);
+    return
 
 }
 
