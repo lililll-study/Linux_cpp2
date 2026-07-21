@@ -90,11 +90,44 @@ $：命令替换。让sheel先执行括号里的，然后把执行结果替换�
 local_ip=$(hostname -I | awk '{print $1}')
 ```
 
+### 4 任务--shell获取本机IP
+
+```shell
+#!/bin/bash
+local_ip=$(hostname -I | awk '{print $1}')
+echo "Local IP Address: $local_ip"
+
+
+
+```
+
+
+
 
 
 # 编程技术点解析
 
-### 开始 状态机实现文件单词统计
+## 零 状态机实现文件单词统计
+
+### 1 作业-实现单词个数的统计
+
+**需求分析：**
+
+    当前通过fgetc函数从文件中拿到一个字符，然后对字符判断是否等于关键字，如果等于则将状态切换（单词数+1）。如果需要统计每个单词的数量，有下面两种方案：
+
+<mark>暴力解法</mark>
+
+```text
+while循环（结束标志为EOF）
+判断当前的字符是否是字母。
+    如果是字母，则把字母转小写并加入word中
+    如果不是字母，则结束当前单词，并把单词加入到dict中。
+最后打印数组中的键值对。
+```
+
+这样的话，时间复杂度位于O(N^2)和O(n * m)之间，如果想降低时间复杂度，需要实现哈希表存储。
+
+
 
 
 
@@ -170,7 +203,7 @@ struct person{
     struct person *pervious;
 }
 // 定义通讯录
-struct contactss{
+struct contacts{
     struct person *people;
     int count;
 }
@@ -330,8 +363,6 @@ struct contactss{
 
 条件变量(Condition Variable)， 是一个“线程等待队列”。本质是内核维护的一个等待队列，类似一个线程链表，其中的线程睡眠则入队(pthread_cond_wait)，线程唤醒则出队(pthread_cond_signal)。
 
-
-
 ```c
 // 工作线程 (消费者)：没事就睡觉
 pthread_cond_wait(&pool->cond, &pool->mutex);
@@ -367,22 +398,86 @@ pthread_cond_signal(&pool->cond);
 
 ## 四 数据库
 
-### MySQL数据库操作
+### 1 MySQL数据库操作
 
-```
+在数据库workbench中操作表，和使用C代码操作表的流程有什么不同
+
+- workbench中连接数据库以及初始化的操作都通过软件直接完成，只要输入sql语句就行。
+
+- 通过代码操作，需要先初始化数据库，然后连接数据库，接着再发送请求。得到的数据库结果是存储在管道内的，需要设计API进行读取。
+
+```sql
+# 1. 给admin用户授予全部权限
+*.*表示所有库所有表
 grant all privileges on *.* to 'admin'@'%';
+
+# 2. 给admin授予mysql数据库的权限
 grant select on mysql.* to 'admin'@'%';
 
-
+# 3. 创建一个新用户
+%表示允许从任何IP地址连接
 create user 'admin'@'%' identified by '123321';
+
+
 show databases;
 use mysql;
 show tables;
 mysql -u root -p
-
-
-
 ```
+
+
+
+### 2 项目中的API封装
+
+#### ①数据库封装
+
+现在驱动层封装的很薄，可以进一步把驱动层抽象出来
+
+```c
+// 直接使用 MySQL C API，但用宏隔离了连接信息
+#define LHY_DB_SERVER_IP   "192.168.137.128"
+#define LHY_DB_SERVER_PORT 3306
+#define LHY_DB_SERVER_USER "admin"
+#define LHY_DB_SERVER_PWD  "123321"
+#define LHY_DB_DEFAULTDB   "LHY_DB"
+
+// 直接调用 MySQL API
+MYSQL mysql;
+mysql_init(&mysql);
+mysql_real_connect(&mysql, LHY_DB_SERVER_IP, LHY_DB_SERVER_USER, ...);
+```
+
+#### ② SQL语句封装
+
+直接通过#define定义sql语句。包括插入数据，查询数据，定义一个过程，插入图片数据。
+
+```sql
+语句中用到了一个过程，过程PROC是在MYSQL workbench中定义的
+#define SQL_DELETE_TBL_USER "CALL PROC_DELETE_USER('bruce')"
+
+
+USE LHY_DB;
+DELIMITER $$
+
+CREATE PROCEDURE PROC_DELETE_USER(IN UNAME VARCHAR(32))
+BEGIN
+    SET SQL_SAFE_UPDATES = 0;
+    DELETE FROM TBL_USER WHERE U_NAME = UNAME;
+    SET SQL_SAFE_UPDATES = 1;
+END$$
+
+CALL PROC_DELETE_USER('LHY');
+```
+
+
+
+#### ③ 网络封装
+
+当前项目采用的是本地命令行工具，还没有网络层，如果要对外提供服务，需要采用HTTP + JSON的格式。
+
+
+
+### 3 项目中遇到的问题
 
 数据库服务器限制root的远程登陆
 
@@ -392,13 +487,11 @@ admin没有权限操作数据库
 
 
 
-
-
-```
+```text
 客户端    login       node server      select         db server
 微信  →  网络连接   →  业务逻辑实现  →   网络连接    →   数据库服务器
-qq等                                                 ⬇
-                                                   数据库
+qq等                                                     ⬇
+                                                       数据库
 ```
 
 
@@ -431,6 +524,160 @@ sudo apt-get install libmysqlclient-dev
 
 
 
-作业题：
+作业题：封装一个数据库连接池
 
-![3b67015f-5f94-4267-a4ee-5171f53bc8e1](file:///U:/picture/3b67015f-5f94-4267-a4ee-5171f53bc8e1.png)
+![3b67015f-5f94-4267-a4ee-5171f53bc8e1](U:\linux_first\picture\3b67015f-5f94-4267-a4ee-5171f53bc8e1.png)
+
+
+
+## 五 DNS协议及UDP编程
+
+### 1 网络层级架构
+
+
+
+- **物理层**：bits流
+
+- **数据链路层**：MAC地址，用于在同一个局域网上找到对方
+
+- **网络层**：IP地址，在全球互联网中找到对方
+
+- **传输层**：端口号，数据该交给电脑上的那个程序 (进程)
+
+- **协议层**：传输协议 (数据格式)，规定数据的格式(DNS, FTP, HTTP)
+  
+  
+
+### 2 各类网络协议对比
+
+<mark>HTTP：网站的内容        ——应用层</mark>
+
+<mark>DNS：把域名转换为IP，查地址  —— 应用层</mark>
+
+<mark>UDP和TCP：运输方式（怎么把数据送出去）——传输层</mark>
+
+
+
+### 3 DNS为什么是“树状结构”
+
+DNS的域名空间本质上是一颗 “倒挂的树”。如下图所示，首先在根服务器(.)中查询.com的位置，根返回IP后，去这个IP查询0voice.com在哪，依次查询完整个www.0voice.com整个域名，然后拿到IP地址。
+
+这就是典型的“**<mark>递归查询 + 迭代查询</mark>**”
+
+```text
+                       . (根)
+                       │
+         ┌─────────────┼─────────────┐
+         │             │             │
+        com           net           org    （顶级域）
+         │             │
+    ┌────┴────┐   ┌────┴────┐
+  baidu   google 0voice  github    （二级域）
+    │        │
+  www       mail                    （主机名）
+
+域名hostname： www .0voice .com
+DNS编码name:  3www 60voice 3com0                       
+```
+
+#### 哈夫曼树
+
+一种数据压缩算法，是多叉树，统计出现字符的频率，出现频率越高的越靠近根节点，这样高频字符的编码更短。
+
+**<mark>本质：优先处理最重要的分支</mark>**
+
+#### 常见应用- 各类压缩领域
+
+**1: 文件压缩 (ZIP)**
+
+扫描文件，统计每个字节出现的频率，频率高的用短bit表示，频率低的用长bit表示。
+
+**2: 图片压缩 (JPEG)**
+
+* JPEG 在“量化”之后，会对图像数据做哈夫曼编码。高频细节（人眼不敏感）用长编码，低频信息（人眼敏感）用短编码。
+
+* **效果**：在几乎不损失画质的情况下，把照片体积缩小 5～10 倍。
+  
+  
+
+### 4 项目中技术点
+
+#### 1：strtok
+
+按照指定的分隔符 delim，把一个字符串拆成多个token。
+
+```c
+char *strtok(char *str, const char *delim)
+
+char data[] = "www.0voice.com";
+char delim[] = ".";    // 代码中定义的是dellim[2] = "."，这是包含了分隔符
+
+// 第一次调用：传入原字符串
+char *token = strtok(data, delim);  // 返回 "www"
+while (token != NULL) {
+    printf("%s\n", token);
+    // 后续调用：传 NULL，继续拆剩下的部分
+    token = strtok(NULL, delim);
+}
+```
+
+
+
+#### 2 :  srtncpy
+
+安全复制字符串，最多复制n给字符从src到dest。
+
+```c
+char dest[10];
+char src[] = "hello";
+
+strncpy(dest, src, sizeof(dest)-1);
+dest[sizeof(dest)-1] = '\0';
+```
+
+#### 3 : srtdup
+
+复制字符串，并动态分配内存 (内部调用malloc)。
+
+```c
+char *origin = "hello";
+char *copy = strdup(origin);  // 自动分配内存并复制
+
+printf("%s\n", copy);  // hello
+free(copy);            // 需要手动释放！
+```
+
+
+
+#### 4 : 套接字
+
+套接字Socket是网络通信的门把手。在Linux系统中，socket是一个文件描述符，在使用如下的socket函数创建套接字后，会返回一个sockfd，后续针对这个连接的操作都通过sockfd来识别。
+
+```c
+int sockfd = socket(AF_INET, SOCK_DGRAM, 0)
+// AFINET表示使用IPV4地址族
+// Socket Datagram（数据报套接字）
+sockfd >0表示创建成功
+```
+
+### 5 传输方式
+
+**UDP的好处，是TCP不具备的**
+
+1: UDP传输速度快（对网络带宽无限制）
+
+- 例如传输大文件的时候（下载）
+
+2: UDP响应速度快
+
+- 用在游戏领域（游戏）
+  
+  
+
+项目思考：
+
+- 此处使用的是UDP进行数据传输，能改成TCP吗？
+
+- 实现异步DNS
+
+- 什么是DNS协议，协议内容有什么
