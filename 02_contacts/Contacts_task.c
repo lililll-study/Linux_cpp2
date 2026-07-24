@@ -4,6 +4,7 @@
 
 #define NAME_LENGTH 16
 #define PHONE_NUMBER_LENGTH 32
+#define ALPHABET_COUNT 26
 // 为什么要定义宏，因为上线的时候只要把info置为空，就可以去掉所有的打印语句，减少性能损失
 #define INFO        printf
 
@@ -41,9 +42,10 @@ struct person
 };
 
 // 定义结构体
-// *people是一个链表，count是联系人数量
+// *group是一个数组，存储通讯录的26个字母，每个字母对应一个通讯录链表
+// count是联系人数量
 struct contacts {
-    struct person *people;
+    struct person *groups[ALPHABET_COUNT];
     int count;
 };
 
@@ -57,30 +59,72 @@ enum {
 };
 // end===
 
+// 获取姓名首字母对应的索引
+int get_name_index(const char *name) {
+    if (name == NULL || name[0] == '\0') return -1;
+    char first_char = toupper(name[0]);
+    if (first_char >= 'A' && first_char <= 'Z') {
+        return first_char - 'A';
+    }
+    // 姓名首不是字母，报错
+    INFO("Error: Name is not a word");
+    return -1;
+}
+
+// // 获取字母对应的组名
+// char get_group_letter(int index) {
+//     if (index >= 0 && index < ALPHABET_COUNT) {
+//         return 'A' + index;
+//     }
+//     return '?';
+// }
 
 
 // interface 接口层 ===
-// *people是一个链表，*person是一个要插入/删除/搜索的联系人
-// 和底层的链表进行一个隔离，提供一个接口来操作联系人列表
-// 由于直接修改原来的形参(struct person *people)会导致调用者无法获取到修改后的结果，所以需要使用指针的指针来传递联系人列表的地址，以便在函数内部修改它。
-int person_insert(struct person **ppeople, struct person *person){
+// 从插入到单一的链表，变成计算索引后插入对应的组中
+int person_insert(struct person **group_head, struct person *person){
     // 如果person为NULL，说明没有要插入的联系人，返回-1表示插入失败
     if( person == NULL) return -1;
-    LIST_INSERT(person, *ppeople);
+    // 如果链表为空，直接插入
+    if (*group_head == NULL) {
+        person->next = NULL;
+        person->previous = NULL;
+        *group_head = person;
+        return 0;
+    }
+    // 按姓名顺序插入（保持组内有序）
+    struct person *current = *group_head;
+    struct person *prev = NULL;
+
+    // 找到插入位置（按姓名升序排列）
+    while (current != NULL && strcmp(person->name, current->name) >0) {
+        prev = current;
+        current = current->next;
+    }
+
+    // 插入到合适位置
+    person->next = current; 
+    person->previous = prev;    
+
+    if (prev) prev->next = person; // 插入到中间或尾部
+    else *group_head = person;  // 插入到头部
+
+    if (current) current->previous = person;    // 更新后继节点的前驱指针
     return 0;
 }
 
-int person_delete(struct person **ppeople, struct person *person){
+// 计算索引后在对应组删除
+int person_delete(struct person **group_head, struct person *person){
     // 如果person为NULL，说明没有要删除的联系人，返回-1表示删除失败
     if (person == NULL) return -1;
-    LIST_REMOVE(person, *ppeople);
+    LIST_REMOVE(person, *group_head);
     // 删除成功，返回0
     return 0;
 }
-
-struct person* person_search(struct person *people, const char *name){
+// 在单个组中搜索
+struct person* person_search_in_group(struct person *group_head, const char *name){
     struct person *item = NULL;
-    for (item = people; item != NULL; item = item->next) {
+    for (item = group_head; item != NULL; item = item->next) {
         // 如果相等则strcmp=0，说明找到了要搜索的联系人，跳出循环
         if (!strcmp(item->name, name))
             break;
@@ -88,12 +132,56 @@ struct person* person_search(struct person *people, const char *name){
     return item;
 }
 
-int person_traversal(struct person *people){
-    struct person *item = NULL;
-    for (item = people; item != NULL; item = item->next) {
-        // 打印联系人姓名和电话号码
-        // 不建议使用printf的方式实现，而通过定义宏的方式实现
-        INFO("name: %s, phone: %s\n", item->name, item->phone_number);
+// 全局搜索（入口函数）
+// 利用首字母索引直接定位到对应的组。
+struct person* person_search_global(struct contacts *cts, const char *name) {
+    if (cts == NULL || name == NULL) return NULL;
+
+    int index = get_name_index(name);
+    if (index < 0 || index >= ALPHABET_COUNT) {
+        return NULL;
+    }
+    // 只搜索对应的组
+    return person_search_in_group(cts->groups[index], name);
+}
+
+
+// 遍历所有组
+int person_traversal(struct contacts *cts){
+    if (cts == NULL) return -1;
+    
+    int total=0, i = 0;  // 统计总人数
+    for (i = 0; i < ALPHABET_COUNT; i++) {
+        if (cts->groups[i] != NULL) {
+            INFO("=== Group %c ===\n", 'A' + i);
+            // 遍历当前组的链表
+            struct person *item = cts->groups[i];
+            while (item != NULL) {
+                // 打印联系人信息
+                INFO("name: %s, phone: %s\n", item->name, item->phone_number);
+                item = item->next;
+                total++;
+            }
+        }
+    }
+    // 打印总人数
+    INFO("Total: %d contacts\n", total);
+    return 0;
+}
+
+
+// 遍历指定组
+int person_traversal_group(struct person *group_head, char group_letter) {
+    if (group_head == NULL) {
+        INFO("Group %c is empty\n", group_letter);
+        return 0;
+    }
+    
+    INFO("=== Group %c ===\n", group_letter);
+    struct person *item = group_head;
+    while (item != NULL) {
+        INFO("  name: %s, phone: %s\n", item->name, item->phone_number);
+        item = item->next;
     }
     return 0;
 }
@@ -109,13 +197,21 @@ int insert_entry(struct contacts *cts){
     scanf("%s", p->name); // 当scanf超过16位时，会造成溢出（todo :待解决的问题，如何解决scanf数组溢出的问题）
     INFO("input phone number: \n");
     scanf("%s", p->phone_number); 
+
+    // 计算首字母索引
+    int index = get_name_index(p->name);
+    if (index <0 || index >= ALPHABET_COUNT) {
+        free(p);
+        return -3;
+    }
+
     // 插入联系人到联系人列表中,需要传递的是两个地址，第一个实参需要people这个指针指向的地址改了，故第一个实参需要传入指针的地址
-    if (0 != person_insert(&cts->people, p)){
+    if (0 != person_insert(&cts->groups[index], p)){
         free(p);
         return -3;
     }
     cts->count++;
-    INFO("insert success\n");
+    INFO("insert success (Group %c)\n", 'A' + index);
     return 0;
 
 }
@@ -123,7 +219,7 @@ int insert_entry(struct contacts *cts){
 int print_entry(struct contacts *cts){
     // cts->people
     if (cts == NULL) return -1;
-    person_traversal(cts->people);
+    return person_traversal(cts);  // 修改：传入cts而不是people
     return 0;
 }
 
@@ -134,15 +230,22 @@ int delete_entry(struct contacts *cts){
     char name[NAME_LENGTH] = {0};
     scanf("%s", name);
 
-    struct person *ps = person_search(cts->people, name);
+    // 先计算索引，在对应的组中搜索
+    int index = get_name_index(name);
+    if (index < 0 || index >= ALPHABET_COUNT) {
+        INFO("delete failed, invalid name\n");
+        return -2;
+    }
+
+    struct person *ps = person_search_in_group(cts->groups[index], name);
     if (ps == NULL) {
         INFO("delete failed, not found\n");
         return -2;
     }
 
-    person_delete(&cts->people, ps);
+    person_delete(&cts->groups[index], ps);
     free(ps);
-    // cts->count--;
+    cts->count--;
     INFO("delete success\n");
     return 0;
 }
@@ -154,7 +257,7 @@ int search_entry(struct contacts *cts){
     char name[NAME_LENGTH] = {0};
     scanf("%s", name);
 
-    struct person *ps = person_search(cts->people, name);
+    struct person *ps = person_search_global(cts, name);
     if (ps == NULL) {
         INFO("search failed, not found\n");
         return -2;
@@ -162,27 +265,35 @@ int search_entry(struct contacts *cts){
     INFO("search success, name: %s, phone: %s\n", ps->name, ps->phone_number);
     return 0;
 }
-
-int save_file(struct person *people, const char *filename){
+// 遍历所有组保存
+int save_file(struct person **groups, const char *filename){
     FILE *fp = fopen(filename, "w");
     if (fp == NULL) {
         return -1;
     }
-    struct person *item = NULL;
-    for (item = people; item != NULL; item = item->next) {
-        fprintf(fp, "name: %s, phone: %s\n", item->name, item->phone_number); // 写入的数据是在缓存中
-        fflush(fp); // 刷新缓冲区，把数据写入文件
+    int count=0, i = 0;
+    for (i = 0; i < ALPHABET_COUNT; i++) {
+        struct person *item = groups[i];
+        while (item != NULL) {
+            fprintf(fp, "name: %s, phone: %s\n", item->name, item->phone_number); // 写入的数据是在缓存中
+            fflush(fp); // 刷新缓冲区，把数据写入文件
+            item = item->next;
+            count++;
+        }
     }
     fclose(fp);
+    INFO("Saved %d contacts\n", count);
+    return 0;
 }
-
-int load_file(struct person **ppeople, const char *filename){
+// 计算索引后插入对应组
+int load_file(struct contacts *cts, const char *filename){
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {
         return -1;
     }
-    char name[32];
-    char phone[64];
+    char name[NAME_LENGTH];
+    char phone[PHONE_NUMBER_LENGTH];
+    int count = 0;
 
     while (fscanf(fp, "name: %[^,], phone: %s\n", name, phone) == 2) {
         struct person *new_person = (struct person*)malloc(sizeof(struct person));
@@ -192,14 +303,25 @@ int load_file(struct person **ppeople, const char *filename){
         }
         // 把数据拷贝到新节点
         strncpy(new_person->name, name, NAME_LENGTH - 1);
+        new_person->name[NAME_LENGTH - 1] = '\0';
         strncpy(new_person->phone_number, phone, PHONE_NUMBER_LENGTH - 1);
+        new_person->phone_number[PHONE_NUMBER_LENGTH - 1] = '\0';
         new_person->next = NULL;
         new_person->previous = NULL;
-        person_insert(ppeople, new_person);
+
+        // 新增：计算索引并插入到对应组
+        int index = get_name_index(new_person->name);
+        if (index >= 0 && index < ALPHABET_COUNT) {
+            person_insert(&cts->groups[index], new_person);
+            count++;
+        } else {
+            free(new_person);
+        }
     }
-    INFO("load success\n");
-    fclose(fp);      // ← 缺少
-    return 0;        // ← 缺少
+    cts->count = count;
+    INFO("load success, loaded %d contacts\n", count);
+    fclose(fp);
+    return 0;
 }
 
 int save_entry(struct contacts *cts){
@@ -207,7 +329,7 @@ int save_entry(struct contacts *cts){
     INFO("input filename: \n");
     char filename[NAME_LENGTH] = {0};
     scanf("%s", filename);
-    save_file(cts->people, filename);
+    return save_file(cts->groups, filename);
 
 }
 int load_entry(struct contacts *cts){
@@ -215,7 +337,7 @@ int load_entry(struct contacts *cts){
     INFO("input filename: \n");
     char filename[NAME_LENGTH] = {0};
     scanf("%s", filename);
-    load_file(&cts->people, filename);
+    return load_file(cts, filename);
 }
 
 // end ===
@@ -240,9 +362,9 @@ int main(){
 
     while(1){
         menu_info();
-
         int select = 0;
         scanf("%d", &select);
+
         switch (select) {
             case OPER_INSERT:
                 insert_entry(cts);

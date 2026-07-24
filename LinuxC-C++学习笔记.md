@@ -103,8 +103,6 @@ echo "Local IP Address: $local_ip"
 
 
 
-
-
 # 编程技术点解析
 
 ## 零 状态机实现文件单词统计
@@ -172,7 +170,7 @@ person_insert2(head, &lhy)
 
 #### 2️⃣实现代码重写
 
-##### 底层操作层
+##### 1 底层操作层
 
 ```c
 // 底层数据层entity，构建的是双向列表
@@ -219,21 +217,219 @@ struct contacts{
 
         3：在外部调用时，外部的变量会出现野指针(指向已被释放或无效的内存地址)。
 
-##### 接口层
+##### 2 接口层
 
-```
+```c
 // 接口层interface
+int person_insert(struct person **ppeople, struct person *person){
+    if( person == NULL) return -1;
+    LIST_INSERT(person, *ppeople);
+    return 0;
+}
+
+int person_delete(struct person **ppeople, struct person *person){
+    if (person == NULL) return -1;
+    LIST_REMOVE(person, *ppeople);
+    return 0;
+}
+struct person* person_search(struct person *people, const char *name){
+    struct person *item = NULL;
+    for (item = people; item != NULL; item = item->next) {
+        // 如果相等则strcmp=0，说明找到了要搜索的联系人，跳出循环
+        if (!strcmp(item->name, name))
+            break;
+    }
+    return item;
+}
+
+int person_traversal(struct person *people){
+    struct person *item = NULL;
+    for (item = people; item != NULL; item = item->next) {
+        // 打印联系人姓名和电话号码
+        // 不建议使用printf的方式实现，而通过定义宏的方式实现
+        INFO("name: %s, phone: %s\n", item->name, item->phone_number);
+    }
+    return 0;
+}
+```
+
+注意：
+
+- 这里的插入和删除操作，是在链表操作的基础上进行了一层封装。并且由于person结构体是具有结构体标签的，所以调用时需要在标签前面加上struct，如果是用typedef定义的结构体，那么调用时就不需要加上struct。<mark>不过typedef定义的结构体不能作为链表元素自引用。</mark>
+
+- 还有一个点这里传入的插入的people参数，由于需要在宏定义中进一步修改指针指向地址的值，所以在封装的接口层的形参要用<mark>双指针 **people。</mark>
+
+##### 3 业务层
+
+代码主要是在接口层的基础上进一步封装，设置有insert_entry、print_entry、delete_entry、search_entry, save_file、load_file等业务函数。insert_entry等函数的逻辑基本类似，都是向输入形参的通讯录中，调用接口层的函数完成CRUD等操作。下面介绍一下<mark>把通讯录保存进文件的IO操作</mark>等函数逻辑。
+
+```c
+// 将链表中的联系人写入文件
+int save_file(struct person *people, const char *filename){
+    FILE *fp = fopen(filename, "w"); // 以 写 模式打开文件
+    if (fp == NULL) {
+        return -1;
+    }
+    struct person *item = NULL;
+    for (item = people; item != NULL; item = item->next) {
+        // 格式化写入数据到文件缓冲区
+        fprintf(fp, "name: %s, phone: %s\n", item->name, item->phone_number); 
+        // 立即刷新缓冲区（强制写入磁盘）
+        fflush(fp); // 刷新缓冲区，把数据写入文件
+    }
+    fclose(fp); // 关闭文件 （自动刷新缓冲区）
+}
+
+int load_file(struct person **ppeople, const char *filename){
+    FILE *fp = fopen(filename, "r"); // 只读模式打开文件
+    if (fp == NULL) {
+        return -1;
+    }
+    // 临时缓冲区
+    char name[32];
+    char phone[64];
+    // 解析文件内容
+    //  %[^,]  = 读取直到遇到逗号（不包含逗号）
+    // %s     = 读取字符串（直到空格或换行）
+    while (fscanf(fp, "name: %[^,], phone: %s\n", name, phone) == 2) {
+        struct person *new_person = (struct person*)malloc(sizeof(struct person));
+        if (new_person == NULL){
+            fclose(fp);
+            return -2;
+        }
+        // 复制数据
+        strncpy(new_person->name, name, NAME_LENGTH - 1);
+        strncpy(new_person->phone_number, phone, PHONE_NUMBER_LENGTH - 1);
+        // 初始化指针
+        new_person->next = NULL;
+        new_person->previous = NULL;
+        // 插入链表
+        person_insert(ppeople, new_person);
+    }
+    INFO("load success\n");
+    fclose(fp);
+    return 0;
+}
+```
+
+关键函数
+
+- fprintf —— 格式化输出到文件
+
+```c
+int fprintf(FILE *stream, const char *format, ...);
+例子
+  fprintf(fp, "name: %s, phone: %s\n", item->name, item->phone_number); 
+```
+
+将格式化的数据写入到指定的文件流中。
+
+- fflush —— 刷新缓冲区
+
+```c
+int fflush(FILE *stream);
+例子
+fflush(fp);
+```
+
+将缓冲区中的数据立即写入到文件（或其他输出设备）
+
+- fscanf —— 格式化输入从文件
+
+```c
+int fscanf(FILE *stream, const char *format, ...);
+例子
+fscanf(fp, "name: %[^,], phone: %s\n", name, phone) == 2
+```
+
+从文件中读取数据并按照指定格式解析。
+
+成功的话，返回成功匹配并赋值的参数个数
+
+失败的话返回0；
+
+
+
+有一个问题，当scanf的长度超过16个字符时，会造成内存溢出，如何解决？
+使用getline：
+
+```c
+struct person {
+    char *name;  // 动态分配，没有长度限制
+    char *phone;
+};
+
+int insert_entry(struct contacts *cts) {
+    if (cts == NULL) return -1;
+
+    struct person *p = (struct person*)malloc(sizeof(struct person));
+    if (p == NULL) return -2;
+
+    size_t size = 0;
+
+    // getline 自动分配内存，可以读取任意长度
+    printf("input name: \n");
+    if (getline(&p->name, &size, stdin) != -1) {
+        // 移除换行符
+        size_t len = strlen(p->name);
+        if (len > 0 && p->name[len - 1] == '\n') {
+            p->name[len - 1] = '\0';
+        }
+        printf("Name: %s (length: %zu)\n", p->name, strlen(p->name));
+    }
+
+    // 可以再次使用，size 会自适应
+    printf("input phone: \n");
+    if (getline(&p->phone, &size, stdin) != -1) {
+        size_t len = strlen(p->phone);
+        if (len > 0 && p->phone[len - 1] == '\n') {
+            p->phone[len - 1] = '\0';
+        }
+        printf("Phone: %s (length: %zu)\n", p->phone, strlen(p->phone));
+    }
+
+    // 注意：需要释放内存
+    // free(p->name);
+    // free(p->phone);
+
+    return 0;
+}
 ```
 
 
 
+### 3 作业-- 按照姓名首字母存储通讯录，使用数组+链表
+
+需求分析：
+
+在每次插入联系人的时候，都把首字母取出，首字母存在长度为26的数组中，数组中的每个元素对应着一个子通讯录。
+
+修改逻辑是
+
+插入person：先计算name的索引，再插入到对应的组中去。
+
+搜索：先根据首字母定位到组，再在组内搜索。
+
+print遍历：两层循环，遍历26个组，每个组的链表
 
 
-##### 业务层
 
+关键函数：根据name获取首字母
 
+```c
+int get_name_index(const char *name) {
+    if (name == NULL || name[0] == '\0') return -1;
+    char first_char = toupper(name[0]); // 访问指针指向的第一个字节
+    if (first_char >= 'A' && first_char <= 'Z') {
+        return first_char - 'A';
+    }
+    // 姓名首不是字母，报错
+    INFO("Error: Name is not a word");
+    return -1;
+}
+```
 
-##### 主函数
+将小写字母转换为对应的大写字母。
 
 
 
@@ -372,6 +568,24 @@ pthread_cond_wait(&pool->cond, &pool->mutex);
 pthread_cond_signal(&pool->cond);
 ```
 
+
+
+### 4 线程池的实现原理
+
+线程池的实现原理是：
+
+1：为什么要线程池？：提前创建好一批工作线程，让他们反复的处理任务，而不是说每次有任务就创建新的线程，大大降低了创建和销毁线程的开销。
+
+2：实现原理：创建一批工作线程，再创建一个任务队列，工作线程池中的线程把任务推送到任务队列，并从任务队列中取出任务执行。任务队列通过链表实现，主要负责任务的入队和出队。
+
+关键--同步机制：同步机制主要通过锁和条件变量来控制。具体来说，线程池的主要逻辑是在线程池回调函数中实现的，首先在while循环中，给任务队列上锁，然后线程池判断任务队列有没有任务，没有任务就执行pthread_cond_wait把线程推入睡眠队列中，让出CPU资源，并且这个过程会释放锁，使得其他线程能够往任务队列中推送新任务。注意推送任务的过程中，会通过pthread_cond_signal函数唤醒一个线程来工作。
+
+如果任务队列中有任务了，那么取出任务，释放锁并执行任务。
+
+任务队列是受到锁的安全保护的，任务的取出需要通过cond唤醒线程。
+
+
+
 线程池的设计：任务队列和线程队列
 
 线程池的回调函数设计（如何设计回调函数，才能够实现高并发）
@@ -386,13 +600,91 @@ pthread_cond_signal(&pool->cond);
 
 
 
+### 5 遇到的问题&作业
+
+#### 项目中的问题
+
+1： pool --> memset()
+
+2: void *arg --> struct  nTask *task
+
+3: 主线程没有等待任务的结束 --> getchar()
+
+
+
+
+
+#### 作业-- 使用CAS并控制线程池数量
+
+如果对于IO密集型的任务，比如WEB服务器，这种多是数据库查询的，故能够将线程数设置的远大于CPU核心数，因为线程大部分时间在等待数据库响应。
+
+但是对于CPU密集型任务，比如视频编码或者计算等，线程数最好小于等于CPU核心数，因为如果线程数过多，会增加上下文切换的开销。
+
+**上下文切换：**
+
+```
+线程 A → 线程 B 切换
+    1. 保存线程 A 的寄存器状态（PC、SP、通用寄存器）
+    2. 保存线程 A 的栈指针
+    3. 加载线程 B 的寄存器状态
+    4. 加载线程 B 的栈指针
+    5. 刷新 CPU 缓存（Cache 失效）
+
+开销：~1-10 微秒（看似小，但累积起来很大）
+```
+
+
+
+
+
 其他任务：
 
 1：在锁的任务中实现了百万次并发，更改为使用CAS实现
 
-2：这里的锁，能不能改为其他锁？有什么区别？能不能用CAS？这里能不能更改线程池的数量？
+    使用CAS实现的话不方便，第一点实现难度非常高，并且容易出现ABA问题，且内存管理复杂。
+
+2：**这里的锁，能不能改为其他锁**？有什么区别？这里能不能更改线程池的数量？
+
+    首先，对于自旋锁，由于代码中的线程需要等待wait，而自旋锁不能和条件变量配合使用。**自旋锁只能在“极短”的临界区使用，不能包含睡眠操作。**
+
+    但是可以用<mark>信号量来计数</mark>，信号量是一个计数器，用来控制同时访问某些资源的线程数量。可以理解为一个发牌系统，每个工作线程领到号牌后，计数器-1，用完后再归还号牌，计数器+1。仍然无法替代互斥锁。
+
+
+
+
 
 3：如何查看线程池中的20个线程都被调用了？
+
+```c
+打印日志：
+void task_entry(void *arg) {
+    struct nTask *task = (struct nTask*)arg;
+    int *idx = (int *)task->user_data;
+
+    // ✅ 打印当前线程的 ID
+    printf("Task %d executed by thread %lu\n", *idx, pthread_self());
+
+    free(task->user_data);
+    free(task);
+}
+
+输出：
+Task 0 executed by thread 140234567890
+Task 1 executed by thread 140234567891
+Task 2 executed by thread 140234567892
+...
+```
+
+### 6 线程池的应用场景
+
+| **Web 服务器**  | 每个 HTTP 请求创建一个线程太浪费，用线程池复用 | Nginx、Apache、Tomcat |
+| ------------ | -------------------------- | ------------------- |
+| **数据库连接池**   | 管理数据库连接，避免频繁创建/销毁连接        | MySQL 连接池           |
+| **任务调度系统**   | 定时任务需要并发执行，线程池控制并发数        | Quartz、XXL-JOB      |
+| **消息队列消费者**  | 多线程消费 MQ 消息，提高吞吐量          | Kafka、RabbitMQ 消费者  |
+| **批量数据处理**   | 大文件分片处理，每个片用一个线程处理         | 日志分析、ETL 工具         |
+| **GUI 后台任务** | 不阻塞 UI 线程，用线程池执行后台任务       | 下载器、进度条更新           |
+| **游戏服务器**    | 处理玩家请求、AI 计算、网络包收发         | 游戏后端                |
 
 
 
@@ -524,9 +816,36 @@ sudo apt-get install libmysqlclient-dev
 
 
 
-作业题：封装一个数据库连接池
+### 4 作业题--封装一个数据库连接池
 
-![3b67015f-5f94-4267-a4ee-5171f53bc8e1](U:\linux_first\picture\3b67015f-5f94-4267-a4ee-5171f53bc8e1.png)
+#### 1 当前代码的问题
+
+1.单一连接：每次只使用了一个MYSQL连接
+
+2.无连接复用：程序结束时才关闭连接
+
+3.无并发支持：多线程环境下无法高效共享连接
+
+#### 2 实现方案
+
+预先创建一批连接(与线程池设计相类似--本质都是池化技术：避免频繁创建的开销)，需要的时候直接调回就行了。设计要点，使用两个链表分别管理空闲和使用中的连接，用互斥锁保证多线程环境下的安全。
+
+但与线程池不同的点有下面几个：
+
+| 特性       | 连接池            | 线程池              |
+| -------- | -------------- | ---------------- |
+| **资源类型** | 网络连接（I/O资源）    | CPU执行单元          |
+| **创建开销** | 网络握手、认证（较慢）    | 创建线程（较快）         |
+| **状态检查** | `mysql_ping()` | `pthread_kill()` |
+| **主要瓶颈** | 网络带宽、数据库连接数    | CPU核心数、内存        |
+| **失效原因** | 网络断开、数据库重启     | 线程异常退出           |
+| **典型应用** | Web服务器、微服务     | 任务处理、并发计算        |
+
+
+
+
+
+
 
 
 
@@ -647,7 +966,21 @@ printf("%s\n", copy);  // hello
 free(copy);            // 需要手动释放！
 ```
 
+### 字符串处理函数学习
 
+**时间：** 贯穿整个对话
+
+**涉及的函数：**
+
+* `strdup` - 字符串复制
+
+* `strtok` / `strtok_r` - 字符串分割
+
+* `toupper` / `tolower` - 字符大小写转换
+
+* `fprintf` / `fscanf` - 格式化文件I/O
+
+* `fflush` - 缓冲区刷新
 
 #### 4 : 套接字
 
@@ -681,3 +1014,350 @@ sockfd >0表示创建成功
 - 实现异步DNS
 
 - 什么是DNS协议，协议内容有什么
+  
+  
+
+### 6 作业--实现异步DNS
+
+方案1：非阻塞Socket + 轮询
+
+方案2：多线程异步查询
+
+方案3：使用select/poll/epoll
+
+原来的阻塞方案
+
+```c
+// 阻塞DNS的工作流程
+int dns_client_commit(const char *domain) {
+    // 1. 创建socket
+    int sockfd = socket(...);
+
+    // 2. 发送请求
+    sendto(sockfd, request, ...);
+
+    // 3. ★ 这里会卡住，直到收到响应 ★
+    int n = recvfrom(sockfd, response, ...);
+    // 程序停在这里，什么都做不了
+
+    // 4. 处理响应
+    printf("收到响应\n");
+    return n;
+}
+```
+
+现在的异步DNS方案（多线程查询）
+
+```c
+// 异步DNS的工作流程
+int dns_query_async(const char *domain) {
+    // 1. 创建任务
+    dns_task_t *task = create_task(domain);
+
+    // 2. ★ 创建新线程执行查询 ★
+    pthread_create(&task->thread, dns_work, task);
+    // 线程立即返回，不阻塞
+
+    // 3. ★ 主线程继续执行其他工作 ★
+    return 0;  // 立即返回
+}
+
+// 工作线程执行实际的DNS查询
+void* dns_work(void *arg) {
+    // 1. 创建socket
+    int sockfd = socket(...);
+
+    // 2. 发送请求
+    sendto(sockfd, request, ...);
+
+    // 3. ★ 在这个线程中阻塞 ★
+    int n = recvfrom(sockfd, response, ...);
+    // 只有这个线程被阻塞，主线程不受影响
+
+    // 4. 保存结果
+    task->response_len = n;
+    task->finished = 1;
+
+    return NULL;
+}
+```
+
+
+
+## 六 HTTP客户端请求
+
+#### 1 TCP&HTTP过程
+
+客户端向服务器请求过程如下：
+
+**第一步**：建立TCP连接
+
+**第二步**：在TCP连接的socket基础上，发送HTTP协议请求
+
+**第三步**：服务器在TCP连接socket，返回http协议的response
+
+```textile
+1. www.baidu.com  --> 翻译为ip  (DNS)
+2. tcp连接这个ip地址 (端口)
+3. 发送http协议数据
+```
+
+
+
+##### ① hostname转ip
+
+不使用DNS的底层方式转换，现在用这个接口函数：
+
+```c
+struct hostent *host_entry = gethostbyname(hostname);
+hostent是C语言中用于存储主机信息的结构体
+struct hostent {
+    char  *h_name;            // 主机的规范名称（官方域名）
+    char  **h_aliases;        // 主机别名列表（数组）
+    int   h_addrtype;         // 地址类型（AF_INET = IPv4, AF_INET6 = IPv6）
+    int   h_length;           // 地址长度（IPv4=4, IPv6=16）
+    char  **h_addr_list;      // IP地址列表（网络字节序）
+};
+```
+
+##### ② 创建套接字
+
+<mark>初始化地址结构</mark>
+
+```c
+// 定义并清零一个IPv4地址结构体
+struct sockaddr_in sin = {0};
+// struct sockaddr_in 的定义（简化）
+struct sockaddr_in {
+    sa_family_t    sin_family;   // 地址族（AF_INET）
+    in_port_t      sin_port;     // 端口号（网络字节序）
+    struct in_addr sin_addr;     // IP地址
+    char           sin_zero[8];  // 填充字节（对齐用）
+};
+
+
+    struct sockaddr_in sin = {0};
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(80);
+    sin.sin_addr.s_addr = inet_addr(ip);  // 设置IP地址
+```
+
+
+
+##### ③ 连接到指定服务器
+
+这个connect的api函数基本没有变化，如果改了的话很多应用程序没法用。所以Linux成功是它定义了非常标准的POSIX API，使得内核升级，应用程序不用做什么更改。
+
+```c
+connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+                            指向服务器地址结构的指针     地址结构的大小
+应用：
+connect(sockfd, (struct sockaddr*)&sin, sizeof(struct sockaddr_in)
+成功：返回0
+失败：返回-1，并设置errno
+```
+
+
+
+##### ④ 设置套接字为非阻塞（非阻塞IO）
+
+如果socket是阻塞，线程来Read() (或者recvfrom())时，如果socket中没有数据，整个线程会被挂起。线程会一直等待IO数据的到来。
+
+如果是非阻塞的，recvfrom的时候，线程立马返回，不会被挂起。---（异步）代码如下：
+
+```c
+fcntl(sockfd, F_SETFL, O_NONBLOCK);
+```
+
+F_SETFL：控制命令（要做什么）, 设置文件状态标志（File Status Flags）
+
+0_NONBLOCK：非阻塞标志
+
+
+
+#### 2 发送HTTP请求
+
+发送一个http请求，chat.deepseek.com是域名，后面/之后带的就是请求的资源
+https://chat.deepseek.com/a/chat/s/2fea173f-ad5c-4d8d-a1fb-94cce8b6ecf3
+
+```c
+    char buffer[BUFFER_SIZE] = {0};
+    sprintf(buffer, 
+    "GET %s %s\r\n\
+    Host: %s\r\n", 
+    resource, HTTP_VERSION, 
+    hostname, 
+    CONNECTION_TYPE);
+    send(sockfd, buffer, strlen(buffer), 0);
+```
+
+<mark>    这里没有用sendto，两者具有区别，重点是是否区分目标地址。</mark>
+
+<mark>    并且send之前必须先connect，而sendto之前不用</mark>
+
+<mark>    send(TCP，可靠，面向连接)</mark>
+
+<mark>    sendto(UDP, 不可靠，可连接也可不连接)</mark>
+
+
+
+#### 3 接收HTTP数据response
+
+由于使用的是非阻塞的socket，因此如果使用recvfrom函数接收响应，会得到一个空数据。故需要用到**select函数**。select检测网络IO里面有没有可读的数据。select起到监听IO的作用，且可同时检测多个IO。
+
+函数解析
+
+```c
+select(int maxfd+1, fd_set *readfds, fd_set *writefds, 
+           fd_set *exceptfds, struct timeval *timeout);
+例子
+int selection = select(sockfd+1, fdread, NULL, NULL, &tv);
+监控可读事件，不监控可写和异常，超时时间5
+```
+
+一共五个参数：
+
+- 判断fd可读集合一共有多少fd，最大fd是多少
+
+- readfds：可读的集合（哪些IO可读）
+
+- 哪些IO可写
+
+- 哪些IO出错
+
+- 超时时间：判断哪个有时间
+
+返回值：
+
+* 成功：就绪的文件描述符数量
+* 超时：0
+* 失败：-1
+
+### 4 调试问题
+
+#### 1- inet_ntoa函数
+
+```c
+return inet_ntoa(*(struct in_addr*)*host_entry -> h_addr_list);
+```
+
+inet_ntoa注意入参形式，* (struct in_addr*) *
+
+
+
+#### 2- HTTP请求
+
+```c
+    char buffer[BUFFER_SIZE] = {0};
+    sprintf(buffer, 
+"GET %s %s\r\n\
+Host: %s\r\n\
+%s\r\n\
+\r\n", 
+    resource, HTTP_VERSION, 
+    hostname, 
+    CONNECTION_TYPE);
+```
+
+ sprintf把字符串拼接进buffer时，字符串分行不能有空格
+
+
+
+### 5 课后问题
+
+HTTP请求协议
+
+TCP编程
+
+
+
+
+
+## 七 TCP服务器
+
+网络变成socket，band，listen，
+
+并发服务器
+
+        一请求一线程
+
+        IO多路复用：select/epoll
+
+TCP服务器百万级连接的做法
+
+### 1 TCP服务器创建过程
+
+创建socket
+
+
+
+初始化IPV4地址结构
+
+
+
+bind把地址和套接字绑定
+
+
+
+listen监听套接字
+
+
+
+accept接收套接字传来的数据
+
+
+
+对比：TCP 服务端 vs UDP 服务端
+---------------------
+
+| 操作    | TCP 服务端                           | UDP 服务端                          |
+| ----- | --------------------------------- | -------------------------------- |
+| 创建套接字 | `socket(AF_INET, SOCK_STREAM, 0)` | `socket(AF_INET, SOCK_DGRAM, 0)` |
+| 绑定    | `bind()` 需要                       | 可要(connect)也可不要(sendto绑定)        |
+| 监听    | `listen()` **必须**                 | ❌ 不需要                            |
+| 接受连接  | `accept()` **必须**                 | ❌ 不需要（直接 `recvfrom`）             |
+| 通信    | `read()`/`write()`                | `sendto()`/`recvfrom()`          |
+
+* * *
+
+总结
+--
+
+| 代码                                | 作用         | 一句话理解        |
+| --------------------------------- | ---------- | ------------ |
+| `socket(AF_INET, SOCK_STREAM, 0)` | 创建 TCP 套接字 | 买了一个电话       |
+| `bind(...)`                       | 绑定 IP 和端口  | 告诉运营商你的电话号码  |
+| `listen(sockfd, 5)`               | 开始监听       | 开机，等待别人打电话进来 |
+| `accept()`                        | 接受连接       | 接起电话，开始通话    |
+
+
+
+#### 阻塞--一请求一线程
+
+在获得如下客户端响应，多个客户端的数据无法区分？sockfd是无法解决这个问题的。需要借助应用层协议来解决。
+
+```bash
+Recv : http://www.cmsoft.cn QQ:10865602, 32 byte(s)
+Recv : http://www.cmsoft.cn QQ:10865602, 32 byte(s)
+Recv : http://www.cmsoft.cn QQ:10865602, 32 byte(s)
+
+
+比如在客户端发送数据时定义下面的格式
+<fromeID:5> <content: xxxxxx>
+```
+
+<mark>这种方式的缺点</mark>
+
+随着客户端越来越多，不适用一请求一线程的方式。比如一个 posix thread 8M的堆栈空间，1G内存才做到128个线程。
+
+
+
+#### epoll--IO多路复用
+
+
+
+
+
+## 八 百万并发服务器
+
+

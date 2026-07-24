@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pthread.h>
+#include <time.h>
 
 #define LHY_DB_SERVER_IP        "192.168.137.128"
 #define LHY_DB_SERVER_PORT      3306
@@ -13,6 +15,26 @@
 // ============ 连接池配置 ============
 #define MAX_POOL_SIZE   10      // 最大连接数
 #define MIN_POOL_SIZE   3       // 最小连接数（初始连接数）
+
+//  连接池数据结构
+typedef struct db_connection {
+    MYSQL *mysql;                // MySQL连接句柄
+    int in_use;                  // 1:使用中 0:空闲
+    time_t last_used;            // 最后使用时间
+    struct db_connection *next;  // 链表指针
+} db_connection_t;
+
+typedef struct {
+    db_connection_t *free_list;    // 空闲连接链表
+    db_connection_t *used_list;    // 使用中连接链表
+    int total_connections;         // 当前总连接数
+    pthread_mutex_t mutex;         // 互斥锁
+} connection_pool_t;
+
+// 全局连接池
+static connection_pool_t g_pool;
+
+
 
 // 插入一条数据
 #define SQL_INSERT_TBL_USER     "INSERT TBL_USER(U_NAME, U_GENGDER) VALUES('bruce', 'dog');"
@@ -71,7 +93,6 @@ int lhy_mysql_select(MYSQL *handle){
     mysql_free_result(res);
     return 0;
 }
-
 
 // 读取图片
 // @func:
@@ -225,24 +246,206 @@ int MYSQL_read(MYSQL *handle, char *buffer, int length) {
 
 }
 
+// ============ 连接池核心函数 ============·在
+// 1. 创建单个数据库连接
+static db_connection_t* create_db_connection() {
+    db_connection_t *conn = (db_connection_t*)malloc(sizeof(db_connection_t));
+    if (!conn) return NULL;
 
+    conn->mysql = mysql_init(NULL);
+    if (!conn->mysql) {
+        free(conn);
+        return NULL;
+    }
+
+    // 连接数据库
+    i (!mysql_real_connect(conn->mysql,
+                           LHY_DB_SERVER_IP,
+                            LHY_DB_SERVER_USER,
+                            LHY_DB_SERVER_PWD, 
+                            LHY_DB_DEFAULTDB, 
+                            LHY_DB_SERVER_PORT, 
+                            NULL, 0)) {
+        mysql_close(conn->mysql);
+        free(conn);
+        return NULL;
+    }
+    conn->in_use = 0;
+    conn->last_used = time(NULL);
+    conn->next = NULL;
+    return conn;
+}
+
+// 2. 初始化连接池 (在main开始时调用)
+void init_connection_pool() {
+    pthread_mutex_init(&g_pool.mutex, NULL);
+    g_pool.free_list = NULL;
+    g_pool.used_list = NULL;
+    g_pool.total_connections = 0;
+    int i = 0;
+
+    // 创建最小数量的初始连接
+    for (i=0; i<MIN_POOL_SIZE; i++) {
+        db_connection_t *conn = create_db_connection();
+        if (conn) {
+            // 头插法：新连接放到链表头部
+            conn->next = g_pool.free_list; // conn是新连接，把原来的连接链表插入到conn的next
+            g_pool.free_list = conn;    // 更新链表头指针
+            g_pool.total_connections++; // 连接总数+1
+            printf("创建初始连接 %d\n", g_pool.total_connections);
+        }
+    }
+    printf("连接池初始化完成，当前连接数: %d\n", g_pool.total_connections);
+}
+
+// 3. 从连接池获取连接
+MYSQL* get_connection_from_pool() {
+    pthread_mutex_lock(&g_pool.mutex); // 获取连接池的互斥锁
+    db_connection_t *conn = NULL;
+
+    if (g_pool.free_list != NULL) { // 如果连接池有空闲连接链表
+        // 从空闲链表中取出节点
+        conn = g_pool.free_list;    // 让conn指向空闲链表的第一个节点
+        g_pool.free_list = conn->next;  // 让空闲链表的指针指向空闲链表的第二个节点（把第一个节点取出）
+        
+        conn->in_use = 1;   // 使用中
+
+        // 把节点添加到使用中链表
+        conn->next = g_pool.used_list;  // 让取出的连接 conn 的 next 指针指向使用中链表的第一个节点
+        g_pool.used_list = conn;    // 更新使用中链表的头指针，让它指向新加入的连接A
+
+        // 检查连接是否有效（自动重连）
+        if (mysql_ping(conn->mysql) != 0) {
+            // 连接已断开，重新连接
+            mysql_close(conn->mysql);
+            conn->mysql = mysql_init(NULL);
+            if (!mysql_real_connect(conn->mysql, 
+                                   LHY_DB_SERVER_IP, 
+                                   LHY_DB_SERVER_USER,
+                                   LHY_DB_SERVER_PWD, 
+                                   LHY_DB_DEFAULTDB, 
+                                   LHY_DB_SERVER_PORT, 
+                                   NULL, 0)) {
+                // 重连失败，从使用列表中移除
+                db_connection_t **pp = &g_pool.used_list; // 创建一个二级指针 pp，指向 g_pool.used_list 本身
+                while (*pp != conn) pp = &(*pp)->next; // 遍历使用链表，找到 conn 所在的节点位置
+                *pp = conn->next;       // 让前一个节点的next跳过conn，直接指向conn的下一个节点
+                free(conn);
+                g_pool.total_connections--;
+                pthread_mutex_unlock(&g_pool.mutex);
+                return NULL;
+            }
+        }
+        
+        pthread_mutex_unlock(&g_pool.mutex);
+        printf("从连接池获取连接，当前使用中: %d\n", g_pool.total_connections);
+        return conn->mysql;
+    }
+    
+    // 没有空闲连接，检查是否可以创建新连接
+    if (g_pool.total_connections < MAX_POOL_SIZE) {
+        conn = create_db_connection();
+        if (conn) {
+            conn->in_use = 1;
+            conn->next = g_pool.used_list;
+            g_pool.used_list = conn;
+            g_pool.total_connections++;
+            
+            pthread_mutex_unlock(&g_pool.mutex);
+            printf("创建新连接，当前总数: %d\n", g_pool.total_connections);
+            return conn->mysql;
+        }
+    }
+    
+    // 连接池已满，等待（简化版：等待1秒后重试）
+    pthread_mutex_unlock(&g_pool.mutex);
+    printf("连接池已满，等待...\n");
+    sleep(1);
+    return get_connection_from_pool();  // 递归重试
+}
+// 4. 归还连接到连接池
+void release_connection_to_pool(MYSQL *mysql) {
+    if (!mysql) return;
+    
+    pthread_mutex_lock(&g_pool.mutex);
+    
+    // 从使用列表中查找并移除
+    db_connection_t *conn = NULL;
+    db_connection_t **pp = &g_pool.used_list;
+    while (*pp != NULL) {
+        if ((*pp)->mysql == mysql) {
+            conn = *pp;
+            *pp = conn->next;
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    
+    if (!conn) {
+        pthread_mutex_unlock(&g_pool.mutex);
+        return;
+    }
+    
+    // 检查连接是否仍然有效
+    if (mysql_ping(conn->mysql) != 0) {
+        // 连接无效，销毁
+        mysql_close(conn->mysql);
+        free(conn);
+        g_pool.total_connections--;
+        printf("连接已失效，销毁，当前总数: %d\n", g_pool.total_connections);
+    } else {
+        // 归还到空闲列表
+        conn->in_use = 0;
+        conn->last_used = time(NULL);
+        conn->next = g_pool.free_list;
+        g_pool.free_list = conn;
+        printf("归还连接到连接池，空闲连接: %d\n", g_pool.total_connections);
+    }
+    
+    pthread_mutex_unlock(&g_pool.mutex);
+}
+
+// 5. 关闭连接池（在程序结束时调用）
+void close_connection_pool() {
+    pthread_mutex_lock(&g_pool.mutex);
+    
+    // 释放所有连接
+    db_connection_t *conn;
+    
+    while (g_pool.free_list) {
+        conn = g_pool.free_list;
+        g_pool.free_list = conn->next;
+        mysql_close(conn->mysql);
+        free(conn);
+    }
+    
+    while (g_pool.used_list) {
+        conn = g_pool.used_list;
+        g_pool.used_list = conn->next;
+        mysql_close(conn->mysql);
+        free(conn);
+    }
+    
+    g_pool.total_connections = 0;
+    pthread_mutex_unlock(&g_pool.mutex);
+    pthread_mutex_destroy(&g_pool.mutex);
+    
+    printf("连接池已关闭\n");
+}
 
 int main() {
-    MYSQL mysql;
-    // 1. 数据库初始化
-    if (NULL == mysql_init(&mysql)){
-        printf("mysql_init : %s\n", mysql_error(&mysql));
+
+    // 1. 初始化连接池（替代原来的mysql_init）
+    init_connection_pool();
+    // 2. 从连接池获取连接
+    MYSQL *mysql = get_connection_from_pool();
+    if (!mysql) {
+        printf("获取连接失败\n");
         return -1;
     }
-    // 2. 连接数据库
-    if (!mysql_real_connect(&mysql, LHY_DB_SERVER_IP, LHY_DB_SERVER_USER,
-        LHY_DB_SERVER_PWD, LHY_DB_DEFAULTDB, LHY_DB_SERVER_PORT, NULL, 0)) {
-        // =0, 表示连接失败
-        printf("mysql_real_connect : %s\n", mysql_error(&mysql));
-        goto Exit;
-    }
-
     printf("====================================\n");
+
+
     // MYSQL --> INSERT
 #if 1// 3. 发送请求（插入一条图片数据）
     if (mysql_real_query(&mysql, SQL_INSERT_TBL_USER, strlen(SQL_INSERT_TBL_USER))){
@@ -271,14 +474,11 @@ int main() {
 
 // 1. 测试案例 -> 将图片读取后写入数据库
     printf("CASE : mysql --> read image and write mysql \n");
-
     char buffer[FILE_IMAGE_LENGTH] = {0};
     ///home/lhy/share/05_mysql
     int length = read_image("litte_cat.jpg", buffer);
     if(length <0 ) goto Exit;
-
     MYSQL_write(&mysql, buffer, length);
-
 
 // 2. 测试案例 -> 将图片从表读取放入本地
     printf("CASE : mysql --> read mysql and write image \n");
@@ -287,7 +487,11 @@ int main() {
     write_image("a.jpg", buffer, length);
 
 Exit:
-    mysql_close(&mysql);
+    // 5. 归还连接到连接池（替代原来的mysql_close）
+    release_connection_to_pool(mysql);
+    
+    // 6. 关闭连接池
+    close_connection_pool();
     return 0;
 }
 
