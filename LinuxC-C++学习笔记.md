@@ -1289,26 +1289,50 @@ TCP服务器百万级连接的做法
 
 创建socket
 
-
+```c
+int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+IPV4地址族，流式套接字(TCP)
+```
 
 初始化IPV4地址结构
 
-
+```c
+struct sockaddr_in addr;
+memset(&addr, 0, sizeof(struct sockaddr_in));
+addr.sin_family = AF_INET;
+addr.sin_port = htons(port);
+addr.sin_addr.s_addr = INADDR_ANY; // 绑定本机到所有网卡
+```
 
 bind把地址和套接字绑定
 
-
+```c
+int ret = bind(sockfd, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
+```
 
 listen监听套接字
 
-
+```c
+ret = listen(sockfd, 5);
+最多同时支持5个客户端在排队等待被accept
+```
 
 accept接收套接字传来的数据
+
+accept会从sockfd获取客户端的ip和端口号，存入client_addr。这里的接收是阻塞调用的，程序会停在这里等待客户端连接。当有连接数据时，accept会返回一个新的套接字clientfd。
+
+```c
+struct sockaddr_in client_addr;
+memset(&client_addr, 0, sizeof(struct sockaddr_in));
+socklen_t client_len = sizeof(client_addr);
+
+
+int clientfd = accept(sockfd, (struct sockaddr*) &client_addr, &client_len)
+```
 
 
 
 对比：TCP 服务端 vs UDP 服务端
----------------------
 
 | 操作    | TCP 服务端                           | UDP 服务端                          |
 | ----- | --------------------------------- | -------------------------------- |
@@ -1354,10 +1378,231 @@ Recv : http://www.cmsoft.cn QQ:10865602, 32 byte(s)
 
 #### epoll--IO多路复用
 
+##### 1 epoll_create--创建epoll
 
+```c
+int epfd = epoll_create(1);
+```
+
+- 入参1表示告诉内核要监听多少个fd（这个值已不再重要，但必须 > 0）
+
+- 返回值epfd：epoll句柄，后续所有epoll操作都通过它完成
+  
+  
+
+##### 2 epoll_ctl--把监听套接字加入EPOLL
+
+epoll事件控制函数，对epoll实例进行增删改操作
+
+```c
+struct epoll_event ev;
+ev.events = EPOLLIN;
+ev.data.fd = sockfd;
+epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &ev);
+```
+
+- 创建epoll事件结构体变量，<mark>用来描述“要监听什么事件”以及“事件发生时返回什么数据”。</mark>
+
+- EPOLLIN: 监听读事件 (stocket创建时要设置为可读)
+
+- ev.data.fd = sockfd;保存fd，事件触发时判断是哪个sockfd
+
+- EPOLL_CTL_ADD把event添加到epoll
+
+- 
+
+**关键设计：** `ev.data.fd` 是用户数据，epoll 不修改它，事件发生时原样返回。所以我们用 `events[i].data.fd == sockfd` 来判断是不是监听套接字。
+
+
+
+##### 3 epoll事件循环
+
+```c
+while (1) {
+    int nready = epoll_wait(epfd, events, EPOLL_SZIE, 5);
+    if (nready == -1) continue;
+}
+```
+
+- events返回的事件组数，EPOLL_SZIE事件组数大小，超时时间 5 秒（如果 5 秒没有事件，`epoll_wait` 返回 0）
+
+- 返回值 `nready`：就绪事件的数量（0 表示超时，-1 表示错误）
+  <mark>**`nready` 是 epoll_wait 的返回值，表示“这次返回了多少个就绪的事件”。用它作为循环上限，可以保证只处理真正有事件发生的 fd，而不用遍历整个数组。**</mark>
+  
+  
+
+**处理事件**
+
+**监听套接字**和**客户端套接字**在程序中的“职责”完全不同，它们触发的“可读”事件含义也完全不同：
+
+| 对比       | 监听套接字（sockfd）              | 客户端套接字（clientfd）          |
+| -------- | -------------------------- | ------------------------- |
+| **身份**   | 服务器的“大门”                   | 每个客户端的“专属通道”              |
+| **事件含义** | 有**新客户端**在门口排队等待接入         | 某个**已连接的客户端**给我发来了数据      |
+| **处理动作** | **`accept()`** —— 把门口的人领进来 | **`recv()`** —— 读取对方发来的消息 |
+| **处理频率** | 每次新连接来时才触发一次               | 每次收到新数据都可能触发              |
+
+所以，epoll 用 `data.fd` 区分它们，当事件发生时，先判断“是谁触发的”，再调用对应的处理逻辑。
+
+
+
+1 新连接事件
+
+<mark>使用EPOLLET边沿触发，数据到达时，epoll只通知一次，如果一次没读完，下次数据到达不会再通知。适合非阻塞socket + 循环读取。</mark>
+
+```c
+if (events[i].data.fd == sockfd) { // listen监听套接字
+    struct sockaddr_in client_addr;
+    memset(&client_addr, 0, sizeof(struct sockaddr_in));
+    socklen_t client_len = sizeof(client_addr);
+
+    int clientfd = accept(sockfd, (struct sockaddr*)&client_addr, &client_len);
+
+    ev.events = EPOLLIN | EPOLLET; // 使用边沿触发来做
+    ev.data.fd = clientfd;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, clientfd, &ev);
+} 
+```
+
+accept执行完成后，操作系统会：
+
+- 分配一个新的套接字，即为返回的clientfd
+
+- 自动完成TCP三次握手 （连接已建立）
+
+- 把客户端IP和端口填入clientfd中
+
+之后再把新生成的 `clientfd` **注册到 epoll**，让 epoll 开始监听它的事件。这样当这个客户端发来数据时，epoll 才能通知你，你才能去 `recv` 收数据。
+
+
+
+2 客户端数据事件
+
+如果不是sockfd，那么就是客户端的数据，在读取完关闭客户端后，把事件回收，需要将事件设置为EPOLLIN：**重新把events设置为可读事件**
+
+并通知epfd，把客户端从EPOLL的监听列表中移除。
+
+```c
+else {
+
+    int clientfd = events[i].data.fd;
+    char buffer[BUFFER_LENGTH] = {0};
+    int len = recv(clientfd, buffer, BUFFER_LENGTH, 0); // 从客户端接收数据
+
+    if (len < 0) { // 读取出错
+        close(clientfd);
+
+        ev.events = EPOLLIN;
+        ev.data.fd = clientfd;
+        epoll_ctl(epfd, EPOLL_CTL_DEL;, clientfd, &ev);
+
+    } else if (len == 0) { // disconnected了，断开连接了
+        close(clientfd);
+
+        ev.events = EPOLLIN;
+        ev.data.fd = clientfd;
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, &ev);
+
+    } else { // >0 收到了len字节的数据
+        printf("Recv : %s, %d byte(s)\n", buffer, len);
+    }
+}
+```
+
+
+
+
+
+关于IO(sockfd)中有没有数据？
+
+epoll_wait检测：
+
+1：如果有数据就会返回（<mark>水平触发</mark>，可多次读）
+
+2：检测从无到有的过程（<mark>边沿触发</mark>，要一次读完）
+
+**一定要注意每次sockfd以及IO的变化，有没有在epoll的集合里面。**
+
+使用epoll肯定会有一个底层的事件主循环，只是说可能封装的方式不一样。
 
 
 
 ## 八 百万并发服务器
+
+实现并发量100w，这里的并发量说的是一秒钟处理的请求数量（QPS）。
+
+1：准备好4个虚拟机
+
+        其中1个4G的内存，2核CPU
+
+        另外3个2g的内存，1核CPU
+
+
+
+### 问题
+
+#### 1 客户端连接被拒绝
+
+
+
+#### 2 服务器开启多个连接端口
+
+
+
+#### 3
+
+
+
+#### 4 防火墙连接数量问题 (内核)
+
+修改配置文件
+
+```bash
+加入网络追踪器(防火墙包)
+sudo modprobe nf_conntrack
+
+sudo vim /etc/sysctl.conf
+
+加入以下内容
+net.ipv4.tcp_mem = 252144 524288 786432
+net.ipv4.tcp_wmem = 1024 1024 2048
+net.ipv4.tcp_mem = 1024 1024 2048
+fs.file-max = 1048576
+net.nf_conntrack_max = 1048576
+
+生效
+sudo sysctl -p
+```
+
+
+
+
+
+#### 5 内存回收
+
+服务器接近100w上限时(82w)，会产生内存快吃满然后逐渐下降的现象，即内存回收。
+
+并且把客户端断开后，服务器CPU会吃满100%，因为断开瞬间服务器会去重连客户端。
+
+为了避免服务器宕机，需要控制CPU和RAM在80%占用附近。
+
+
+
+解决问题：对TCP的每一个连接进行调优
+
+```bash
+sudo vim /etc/sysctl.conf
+修改系统控制内核配置文件
+TCP协议栈大小 下面数据的单位是页：一页 = 4K；252144 = 1G
+                    1G     2G     3G    2到3G时会启动内存优化
+net.ipv4_tcp_mem = 252144 524288 786432 
+net.ipv4_tcp_wmem = 1024 1024 2048    
+net.ipv4_tcp_rmem = 1024 1024 2048
+
+ipv4_tcp_wmem 和ipv4_tcp_rmem 分别是TCPsend buffer和recv buffer的空间
+对应每个socket的发送和接受缓冲区
+默认值和最小值都是1K字节，最大2K
+所以sockfd 最大2k，乘以100w，大约就是2G左右的tcp协议栈大小空间 524288
+```
 
 
