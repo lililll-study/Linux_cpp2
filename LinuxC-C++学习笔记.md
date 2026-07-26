@@ -1541,37 +1541,106 @@ epoll_wait检测：
 
 ### 问题
 
-#### 1 客户端连接被拒绝
+#### 1 进程级限制 - 客户端连接被拒绝
+
+现象：客户端连接被拒绝，是因为客户端访问服务器的端口号不准确，代码中刚开始定义的端口号是100，index循环100次没有找到8888端口就退出连接了（连接报错）。
+
+解决：只要把port宏定义修改为1即可。
+
+**此处说的IO，sock，fd，连接，都是指的socket。**
+
+
+
+现象：Linux内核定义的，每个线程的fd个数仅为1024个。
+
+查看文件系统的所有限制
+
+```bash
+ulimit -a
+```
+
+要永久修改就需要操作内核的文件数量配置
+
+```bash
+sudo vim /etc/security/limits.conf
+
+
+* hard nofile 1048576
+* soft nofile 1048576
+
+
+然后重启系统
+sudo reboot
+```
+
+socket fd 的连接是依次增加的
+
+<mark>修改本质：限制了每个进程能打开的最大文件描述符的数量。</mark>
 
 
 
 #### 2 服务器开启多个连接端口
 
+服务器的一个端口存在连接上限
+
+```bash
+connect: cannot assign requested address
+error: cannot assign requested address
+被分配的请求地址被占用了
+```
+
+**注意sockfd 和 IP的关系**：
+
+<mark>一个sockfd对应一个五元组 -------> (远程IP， 远程port, 本机IP， 本机端口， 协议号)</mark>
+
+<mark>recv和send的时候，也通过这个五元组解决问题</mark>
+
+开100个端口，都加入到epoll集合中，然后准备一个cilentfd的集合来判断客户端的可用状态
+
+1秒大概建立3k个连接，上限可以建立5-8k左右（单进程多端口复用）
 
 
-#### 3
 
+#### 3 内核参数限制 -- 连接超时--防火墙连接数量问题 (内核)
 
-
-#### 4 防火墙连接数量问题 (内核)
-
-修改配置文件
+设置内核中防火墙对外连接数量的，修改配置文件
 
 ```bash
 加入网络追踪器(防火墙包)
 sudo modprobe nf_conntrack
+sudo modprobe ip_conntrack
 
 sudo vim /etc/sysctl.conf
 
 加入以下内容
 net.ipv4.tcp_mem = 252144 524288 786432
 net.ipv4.tcp_wmem = 1024 1024 2048
-net.ipv4.tcp_mem = 1024 1024 2048
+net.ipv4.tcp_rmem = 1024 1024 2048
 fs.file-max = 1048576
 net.nf_conntrack_max = 1048576
 
 生效
 sudo sysctl -p
+```
+
+是内核空间的限制
+
+| 参数                 | 作用              | 影响         |
+| ------------------ | --------------- | ---------- |
+| `tcp_mem`          | TCP 协议栈能使用的最大内存 | 所有连接的总内存上限 |
+| `tcp_wmem`         | 每个连接的发送缓冲区      | 单连接内存占用    |
+| `tcp_rmem`         | 每个连接的接收缓冲区      | 单连接内存占用    |
+| `fs.file-max`      | 系统所有进程能打开的文件总数  | 全局 fd 上限   |
+| `nf_conntrack_max` | 连接跟踪表大小         | NAT/防火墙性能  |
+
+
+
+#### 4 系统中打开文件数量过多file-max
+
+修改sysctl.conf中的最大文件数量
+
+```bash
+fs.file-max = 1048576
 ```
 
 
@@ -1605,4 +1674,14 @@ ipv4_tcp_wmem 和ipv4_tcp_rmem 分别是TCPsend buffer和recv buffer的空间
 所以sockfd 最大2k，乘以100w，大约就是2G左右的tcp协议栈大小空间 524288
 ```
 
+注意，按照上图中的tcp栈空间分配，客户端单次1K*2=2K，客户端+服务端=4K，内核大约2-3K，故
 
+单次连接大约7-8K，主循环是1ms一次，每秒创建1000次连接，所以内存每秒大约上涨7-8M字节。
+
+
+
+#### 为什么是做到百万？
+
+因为企业生产环境多数是百万并发就可以了
+
+![97f34c79-4d65-4f43-b8df-a083db997834](file:///U:/linux_first/picture/97f34c79-4d65-4f43-b8df-a083db997834.png)

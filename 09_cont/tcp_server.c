@@ -144,6 +144,16 @@ int main(int argc, char *argv[]) {
 
                 int clientfd = accept(sockfd, (struct sockaddr*)&client_addr, &client_len);
 
+                // 1. 设置非阻塞
+                fcntl(clientfd, F_SETFL, O_NONBLOCK);
+                // 2. 设置地址重用
+                int reuse = 1;
+                setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+                // 3. 设置小缓冲区（节省内存，用于百万并发）
+                int buffer_size = 256;
+                setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (char *)&buffer_size, sizeof(buffer_size));
+                setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (char *)&buffer_size, sizeof(buffer_size));
+
                 struct epoll_event ev;
                 ev.events = EPOLLIN | EPOLLET; // 使用边沿触发来做
                 ev.data.fd = clientfd;
