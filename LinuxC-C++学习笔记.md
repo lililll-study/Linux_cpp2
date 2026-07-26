@@ -1621,6 +1621,14 @@ net.nf_conntrack_max = 1048576
 
 生效
 sudo sysctl -p
+
+为了保证每次开机都生效，需要执行下面步骤
+sudo vim /etc/modules
+添加
+nf_conntrack
+生效
+sudo modprobe nf_conntrack
+sudo sysctl -p
 ```
 
 是内核空间的限制
@@ -1680,8 +1688,90 @@ ipv4_tcp_wmem 和ipv4_tcp_rmem 分别是TCPsend buffer和recv buffer的空间
 
 
 
+#### 6 以上配置后仍然只有819264并发
+
+尝试1 修改连接回收时间
+
+```bash
+sudo vim /etc/sysctl.conf
+加入
+net.netfilter.nf_conntrack_tcp_timeout_established = 1200
+加载包
+sudo modprobe nf_conntrack_ipv4
+生效
+sudo sysctl -p
+cd share/linux_first/09_cont/
+```
+
+尝试2 <mark>（重点）</mark> 修改epoll的最大监控上限
+
+```bash
+发现当前系统的epoll最大监控上限是819261，这就是为什么服务端每次正好卡在819264后立刻停止创建连接的原因
+lhy@ubuntu:~/share/linux_first/09_cont$ cat /proc/sys/fs/epoll/max_user_watches
+819261
+
+
+```
+
+解决方法：
+
+```bash
+临时：
+sudo sysctl -w fs.epoll.max_user_watches=2097152
+
+永久：
+sudo vim /etc/sysctl.conf
+添加：
+fs.epoll.max_user_watches = 2097152
+生效：
+sudo sysctl -p
+
+```
+
+
+
+
+
+
+
 #### 为什么是做到百万？
 
 因为企业生产环境多数是百万并发就可以了
 
 ![97f34c79-4d65-4f43-b8df-a083db997834](file:///U:/linux_first/picture/97f34c79-4d65-4f43-b8df-a083db997834.png)
+
+
+
+
+
+现在我在进行一个C语言编写的百万级的并发项目，服务端并发到819264个clientfd连接后停止，服务端采用IO复用的方式完成高并发。此时开有3个客户端，第一个客户端运行到connections: 277999时停止并报错。你分析一下原因
+服务器结果：
+Recv : Hello Server: client --> 273023
+, 32 byte(s), clientfd: 819264
+客户端结果：
+connections: 277999, sockfd:278002, time_used:2554
+ Error clientfd:277742, errno:104
+ Error clientfd:277741, errno:104
+
+
+
+服务器以及三个客户端：
+lhy@ubuntu:~/share/linux_first/09_cont$ ulimit -n
+1048576
+服务器内核参数：
+lhy@ubuntu:~/share/linux_first/09_cont$ sudo sysctl -p
+[sudo] password for lhy: 
+net.ipv4.tcp_mem = 252144 524288 786432
+net.ipv4.tcp_wmem = 256 256 512
+net.ipv4.tcp_rmem = 256 256 512
+fs.file-max = 1048576
+net.ipv4.tcp_max_orphans = 16384
+客户端内核参数：
+lhy@ubuntu:~/share/linux_first/09_cont$ sudo sysctl -p
+[sudo] password for lhy: 
+net.ipv4.tcp_mem = 252144 524288 786432
+net.ipv4.tcp_wmem = 1024 1024 2048
+net.ipv4.tcp_rmem = 1024 1024 2048
+fs.file-max = 1048576
+net.nf_conntrack_max = 1048576
+net.netfilter.nf_conntrack_tcp_timeout_established = 1200

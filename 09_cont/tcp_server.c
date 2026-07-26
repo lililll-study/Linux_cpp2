@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 
+#include <sys/resource.h>
+
 #define BUFFER_LENGTH 1024
 #define EPOLL_SIZE 1024
 
@@ -53,6 +55,16 @@ int islistenfd(int fd, int *fds) {
 
 
 int main(int argc, char *argv[]) {
+
+    // 设置最大文件描述符限制
+    struct rlimit lim;
+    lim.rlim_cur = 1000000;
+    lim.rlim_max = 1000000;
+    if (setrlimit(RLIMIT_NOFILE, &lim) != 0) {
+        perror("setrlimit");
+        printf("Please check permissions or use 'sudo' / modify limits.conf\n");
+        return -1;
+    }
 
     if (argc < 2) {
         printf("argc error");
@@ -130,8 +142,13 @@ int main(int argc, char *argv[]) {
     while (1) {
         // events告诉我我们总共有事件的Io有多少个
         // -1表示一直处于阻塞；如果设置5，则表示超过5s后没有事件
-        int nready = epoll_wait(epfd, events, EPOLL_SIZE, 5);
-        if (nready == -1) continue;
+        int nready = epoll_wait(epfd, events, EPOLL_SIZE, -1);
+        // if (nready == -1) continue;
+        if (nready < 0) {
+            if (errno == EINTR) continue; // 被信号中断
+            perror("epoll_wait");
+            break;
+        }
         int i=0;
         for (i=0; i < nready; i++) {
 
@@ -143,6 +160,13 @@ int main(int argc, char *argv[]) {
                 socklen_t client_len = sizeof(client_addr);
 
                 int clientfd = accept(sockfd, (struct sockaddr*)&client_addr, &client_len);
+                if (clientfd < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break; // 处理完毕
+                    }
+                    perror("accept");
+                    break;
+                }
 
                 // 1. 设置非阻塞
                 fcntl(clientfd, F_SETFL, O_NONBLOCK);
@@ -150,14 +174,18 @@ int main(int argc, char *argv[]) {
                 int reuse = 1;
                 setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
                 // 3. 设置小缓冲区（节省内存，用于百万并发）
-                int buffer_size = 256;
-                setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (char *)&buffer_size, sizeof(buffer_size));
-                setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (char *)&buffer_size, sizeof(buffer_size));
+                // int buffer_size = 256;
+                // setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (char *)&buffer_size, sizeof(buffer_size));
+                // setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (char *)&buffer_size, sizeof(buffer_size));
 
                 struct epoll_event ev;
-                ev.events = EPOLLIN | EPOLLET; // 使用边沿触发来做
+                ev.events = EPOLLIN; // 使用边沿触发来做
                 ev.data.fd = clientfd;
-                epoll_ctl(epfd, EPOLL_CTL_ADD, clientfd, &ev);
+                // epoll_ctl(epfd, EPOLL_CTL_ADD, clientfd, &ev);
+                if (epoll_ctl(epfd, EPOLL_CTL_ADD, clientfd, &ev) < 0) {
+                    perror("epoll_ctl");
+                    close(clientfd);
+                }
             } else {
 
                 int clientfd = events[i].data.fd;
@@ -165,6 +193,7 @@ int main(int argc, char *argv[]) {
                 char buffer[BUFFER_LENGTH] = {0};
                 int len = recv(clientfd, buffer, BUFFER_LENGTH, 0); // 从客户端接收数据
                 if (len < 0) { // 读取出错
+                    perror("recv");
                     close(clientfd);
 
                     struct epoll_event ev;
@@ -173,6 +202,7 @@ int main(int argc, char *argv[]) {
                     epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, &ev);
 
                 } else if (len == 0) { // disconnected了，断开连接了
+                    printf("Client disconnected: %d\n", clientfd);
                     close(clientfd);
 
                     struct epoll_event ev;
