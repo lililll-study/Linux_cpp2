@@ -224,7 +224,6 @@ void task_entry(void *arg){
 
 int main(void){
     ThreadPool pool;
-
     nThreadPoolCreate(&pool, THREADPOOL_INIT_COUNT);
 
     int i = 0;

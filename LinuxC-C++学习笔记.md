@@ -608,6 +608,46 @@ pthread_cond_signal(&pool->cond);
 
 2: void *arg --> struct  nTask *task
 
+`void *` 是 C 语言里的 **“万能占位符指针”**。
+
+* “我知道这是个地址，但我不关心它指向什么类型”
+
+* **你不能直接用 `*p` 取值**，因为编译器不知道要读几个字节
+
+由于pthread_create的第四个参数worker是void*类型﻿，因此在线程回调函数中把工作者读取回来时，需要强制转换为(struct nWorker *)类型
+
+
+
+#### 第 1 行：`void task_entry(void *arg)`
+
+* 这是线程池规定的**统一函数签名**（所有任务函数都长这样）
+
+* `arg` 是 `void*`，因为传进来的东西可能是任何类型
+
+#### 第 2 行：`struct nTask *task = (struct nTask*)arg;`
+
+* `arg` 实际指向的是 `struct nTask` 对象
+
+* 强制转换，告诉编译器“这个地址是按 `struct nTask` 格式存放的”
+
+#### 第 3 行：`int *idx = (int *)task->user_data;`
+
+* `task->user_data` 是一个 `void*`，实际指向的是 `int` 类型的数据
+
+* 取出后转成 `int*`，才能读取值
+
+#### 第 4 行：`printf("idx: %d\n", *idx);`
+
+* 真正干活：打印数字
+
+#### 第 5-6 行：释放内存
+
+* `free(task->user_data)`：释放参数数据
+
+* `free(task)`：释放任务结构体本身
+
+
+
 3: 主线程没有等待任务的结束 --> getchar()
 
 
