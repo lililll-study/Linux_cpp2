@@ -535,9 +535,9 @@ int get_name_index(const char *name) {
 
 ## 三 线程池
 
-核心技术
+### 1 核心概念
 
-### 1 什么是线程队列？
+#### 1 什么是线程队列？
 
 线程队列在被创建后，**是由Linux内核统一管理的**。**在高并发的场景下，线程队列在没有任务时会被阻塞在条件变量上，当有任务时，会被轮流唤醒，去从任务队列中取出任务执行。**
 
@@ -549,13 +549,13 @@ int get_name_index(const char *name) {
 
 
 
-### 2 什么是线程加锁？
+#### 2 什么是线程加锁？
 
 线程加锁的目的是为了保证多线程处理任务时的，任务安全性。<mark>如果给线程加锁的话，那么只有这个 线程能够进行操作任务队列，其他线程不行。（当前线程处于临界区，收到保护的共享资源）在操作完任务之后，在解锁。</mark>
 
 简单来说，把多线程的并行操作变为了串行操作。
 
-### 3 什么是条件变量cond？
+#### 3 什么是条件变量cond？
 
 条件变量(Condition Variable)， 是一个“线程等待队列”。本质是内核维护的一个等待队列，类似一个线程链表，其中的线程睡眠则入队(pthread_cond_wait)，线程唤醒则出队(pthread_cond_signal)。
 
@@ -570,33 +570,100 @@ pthread_cond_signal(&pool->cond);
 
 
 
-### 4 线程池的实现原理
+### 2 线程池的实现原理📌
 
-线程池的实现原理是：
+#### 1 如何实现线程池
 
-1：为什么要线程池？：提前创建好一批工作线程，让他们反复的处理任务，而不是说每次有任务就创建新的线程，大大降低了创建和销毁线程的开销。
+（1）初始化线程池
 
-2：实现原理：创建一批工作线程，再创建一个任务队列，工作线程池中的线程把任务推送到任务队列，并从任务队列中取出任务执行。任务队列通过链表实现，主要负责任务的入队和出队。
+       定义线程池管理器（任务链表头，线程链表头，互斥锁和cond）
 
-关键--同步机制：同步机制主要通过锁和条件变量来控制。具体来说，线程池的主要逻辑是在线程池回调函数中实现的，首先在while循环中，给任务队列上锁，然后线程池判断任务队列有没有任务，没有任务就执行pthread_cond_wait把线程推入睡眠队列中，让出CPU资源，并且这个过程会释放锁，使得其他线程能够往任务队列中推送新任务。注意推送任务的过程中，会通过pthread_cond_signal函数唤醒一个线程来工作。
+       任务链表定义（function，user_data（包含的参数），前驱节点和后继节点）
 
-如果任务队列中有任务了，那么取出任务，释放锁并执行任务。
+       线程链表定义（threadid，terminate，所属线程池，前驱和后继节点
 
-任务队列是受到锁的安全保护的，任务的取出需要通过cond唤醒线程。
+（2）创建线程池
+
+Input：刚刚初始化的线程池，以及要创建的线程数量
+
+Func：cond_init初始化条件变量；pthread_mutex_init初始化互斥锁；接着循环创建n个工作线程，包括线程malloc分配内存和指定所属线程池；然后，pthread_create创建线程，函数有4个入参（线程id，线程属性-null表示默认，线程函数指针，传给线程函数的参数—万能指针）
+
+intret = pthread_create(&worker->threadid, NULL, nThreadPoolCallback,worker);
+
+最后，把工作线程插入线程队列。
+
+（3）创建任务
+
+在循环中持续创建任务并分配内存，并执行任务函数和设置任务参数。
+
+（4）把任务推送给线程池
+
+Pushtask函数，入参有线程池和任务，拿到任务后把任务插入任务队列，再调用signal唤醒一个工作线程。
+
+#### 2 线程池怎么执行一个任务
+
+在创建线程池的时候，pthread_create函数会把线程和回调函数绑定，在回调函数中入参是工作线程，循环判断任务队列中有没有任务，没有任务执行pthread_cond_wait挂起线程，此时main函数中主线程会向任务队列中推送任务，并cond_signal唤醒一个工作线程。最后回调函数中检测到有任务来了，就取出任务并执行。
+
+ 
+
+### 3 线程池的应用场景
+
+| **Web 服务器**  | 每个 HTTP 请求创建一个线程太浪费，用线程池复用 | Nginx、Apache、Tomcat |
+| ------------ | -------------------------- | ------------------- |
+| **数据库连接池**   | 管理数据库连接，避免频繁创建/销毁连接        | MySQL 连接池           |
+| **任务调度系统**   | 定时任务需要并发执行，线程池控制并发数        | Quartz、XXL-JOB      |
+| **消息队列消费者**  | 多线程消费 MQ 消息，提高吞吐量          | Kafka、RabbitMQ 消费者  |
+| **批量数据处理**   | 大文件分片处理，每个片用一个线程处理         | 日志分析、ETL 工具         |
+| **GUI 后台任务** | 不阻塞 UI 线程，用线程池执行后台任务       | 下载器、进度条更新           |
+| **游戏服务器**    | 处理玩家请求、AI 计算、网络包收发         | 游戏后端                |
+
+#### （1）DNS请求IP为例
+
+有50个域名要请求IP地址，就可以组织50个任务，一次请求做成一个任务
+
+Use->data：域名
+
+Function：创建UDP，发送一个DNS请求，等待DNS返回结果。获得response后再解析。
+
+把上面两个东西抛给线程池中的任务队列，然后任务队列再通过signal激活线程池中的线程，然后再取出任务执行。
+
+#### （2）数据库查询连接
+
+Use->data：MySQL的handle，以及sql语句，这个handle是已经连接好的。
+
+Function（根据userdata中的数据执行任务功能）：创建UDP，发送一个DNS请求，等待DNS返回结果。获得response后再解析。
+
+#### （3）文件压缩
+
+user-data: 文件的源地址和目的地址，以及文件压缩等级
+
+function：调用压缩库zlib。
+
+#### （4）写日志的动作
+
+写一次日志一个任务，写一次一个任务
+
+Userdata：写日志的具体内容
+
+Func：调用写的动作
 
 
 
-线程池的设计：任务队列和线程队列
+### 4 任务优先级线程池
 
-线程池的回调函数设计（如何设计回调函数，才能够实现高并发）
+1 初始化 
 
-线程池的API创建要点（pool->cond作用！！）
+定义一个任务等级levels，在任务节点中定义int priority变量代表任务优先级。在线程池中的任务链表定义为链表指针数组，实现分桶。
 
-    创建线程池的方法
+2 向线程池推送任务
 
-    销毁线程池的方法（堆栈释放）
+main函数中推送任务之前需要定义好优先级，然后在pushtask推送任务中，insert任务节点时，直接往task->priority对应优先级队列插入任务就行了。
 
-向线程池推送任务的设计方法
+3 线程池执行任务
+
+每次从最高优先级遍历链表头，只要不为空说明有任务，拿出来执行。
+
+插入任务O(1)，取出任务的最坏情况是O(N)，如果高优先级有任务，那么是O(1)
 
 
 
@@ -616,35 +683,22 @@ pthread_cond_signal(&pool->cond);
 
 由于pthread_create的第四个参数worker是void*类型﻿，因此在线程回调函数中把工作者读取回来时，需要强制转换为(struct nWorker *)类型
 
-
-
-#### 第 1 行：`void task_entry(void *arg)`
-
+```bash
+第 1 行：`void task_entry(void *arg)`
 * 这是线程池规定的**统一函数签名**（所有任务函数都长这样）
-
-* `arg` 是 `void*`，因为传进来的东西可能是任何类型
-
-#### 第 2 行：`struct nTask *task = (struct nTask*)arg;`
-
-* `arg` 实际指向的是 `struct nTask` 对象
-
-* 强制转换，告诉编译器“这个地址是按 `struct nTask` 格式存放的”
-
-#### 第 3 行：`int *idx = (int *)task->user_data;`
-
-* `task->user_data` 是一个 `void*`，实际指向的是 `int` 类型的数据
-
-* 取出后转成 `int*`，才能读取值
-
-#### 第 4 行：`printf("idx: %d\n", *idx);`
-
+* `arg` 是 `void*`，因为传进来的东西可能是任何类型
+第 2 行：`struct nTask *task = (struct nTask*)arg;`
+* `arg` 实际指向的是 `struct nTask` 对象
+* 强制转换，告诉编译器“这个地址是按 `struct nTask` 格式存放的”
+第 3 行：`int *idx = (int *)task->user_data;`
+* `task->user_data` 是一个 `void*`，实际指向的是 `int` 类型的数据
+* 取出后转成 `int*`，才能读取值
+第 4 行：`printf("idx: %d\n", *idx);`
 * 真正干活：打印数字
-
-#### 第 5-6 行：释放内存
-
+第 5-6 行：释放内存
 * `free(task->user_data)`：释放参数数据
-
 * `free(task)`：释放任务结构体本身
+```
 
 
 
@@ -715,22 +769,11 @@ Task 2 executed by thread 140234567892
 ...
 ```
 
-### 6 线程池的应用场景
-
-| **Web 服务器**  | 每个 HTTP 请求创建一个线程太浪费，用线程池复用 | Nginx、Apache、Tomcat |
-| ------------ | -------------------------- | ------------------- |
-| **数据库连接池**   | 管理数据库连接，避免频繁创建/销毁连接        | MySQL 连接池           |
-| **任务调度系统**   | 定时任务需要并发执行，线程池控制并发数        | Quartz、XXL-JOB      |
-| **消息队列消费者**  | 多线程消费 MQ 消息，提高吞吐量          | Kafka、RabbitMQ 消费者  |
-| **批量数据处理**   | 大文件分片处理，每个片用一个线程处理         | 日志分析、ETL 工具         |
-| **GUI 后台任务** | 不阻塞 UI 线程，用线程池执行后台任务       | 下载器、进度条更新           |
-| **游戏服务器**    | 处理玩家请求、AI 计算、网络包收发         | 游戏后端                |
-
-
-
 ## 四 数据库
 
-### 1 MySQL数据库操作
+### 基本概念
+
+#### 1 MySQL数据库操作
 
 在数据库workbench中操作表，和使用C代码操作表的流程有什么不同
 
@@ -759,9 +802,9 @@ mysql -u root -p
 
 
 
-### 2 项目中的API封装
+#### 2 项目中的API封装
 
-#### ①数据库封装
+##### ①数据库封装
 
 现在驱动层封装的很薄，可以进一步把驱动层抽象出来
 
@@ -779,7 +822,7 @@ mysql_init(&mysql);
 mysql_real_connect(&mysql, LHY_DB_SERVER_IP, LHY_DB_SERVER_USER, ...);
 ```
 
-#### ② SQL语句封装
+##### ② SQL语句封装
 
 直接通过#define定义sql语句。包括插入数据，查询数据，定义一个过程，插入图片数据。
 
@@ -803,13 +846,13 @@ CALL PROC_DELETE_USER('LHY');
 
 
 
-#### ③ 网络封装
+##### ③ 网络封装
 
 当前项目采用的是本地命令行工具，还没有网络层，如果要对外提供服务，需要采用HTTP + JSON的格式。
 
 
 
-### 3 项目中遇到的问题
+#### 3 项目中遇到的问题
 
 数据库服务器限制root的远程登陆
 
@@ -854,9 +897,41 @@ sudo apt-get install libmysqlclient-dev
 
 
 
+### 数据库连接的实现原理
+
+#### 1 怎么连接一个数据库
+
+调用mysql_init初始化，并使用mysql_real_connect连接数据库。数据库连接必备的几个参数：IP地址、用户名、密码、库名称、端口号。
 
 
-### 4 作业题--封装一个数据库连接池
+
+#### 2 发送请求
+
+mysql_real_query(发送的sql语句，语句长度)
+
+#### 3 查询如何实现
+
+发送一个查询请求query，然后mysql_store_result把结果存储下来，再读取到变量中，最后打印。
+
+#### 4 写入图片到数据库
+
+mysql_stmt_init创建一个句柄，mysql_stmt_prepare准备一个stmt对象。
+
+然后初始化MYSQL_BIND参数，并设定存储类型为BLOB
+
+接着用mysql_stmt_bind_param(stmt, &param);把stmt和参数绑定
+
+mysql_stmt_send_long_data(stmt, 0, buffer, length);把数据发送到服务器
+
+mysql_stmt_execute(stmt);把数据写入库
+
+mysql_stmt_close(stmt);释放stmt所占用的所有资源
+
+
+
+
+
+### 作业题--封装一个数据库连接池
 
 #### 1 当前代码的问题
 
@@ -891,7 +966,33 @@ sudo apt-get install libmysqlclient-dev
 
 ## 五 DNS协议及UDP编程
 
-### 1 网络层级架构
+#### 实现UDP编程
+
+（1）创建套接字
+
+sockfd = socket(AF_INET, SOCK_DGRAM, 0)
+
+（2）构造UDP服务器地址结构体
+
+创建sockaddr_in 类型的servaddr
+
+然后填入IPV4地址族，端口号和服务器IP地址
+
+（3）构建请求流程
+
+connect连接，入参有sockfd，服务器地址和地址长度
+
+然后创建dns请求头和question（注意域名转换为ip地址）
+
+最后调用sendto发送
+
+（3）接受数据
+
+使用recvfrom接受数据，需要提供sockfd, response, addr(返回方地址)，以及地址长度
+
+### 基础知识点
+
+#### 1 网络层级架构
 
 
 
@@ -907,7 +1008,7 @@ sudo apt-get install libmysqlclient-dev
   
   
 
-### 2 各类网络协议对比
+#### 2 各类网络协议对比
 
 <mark>HTTP：网站的内容        ——应用层</mark>
 
@@ -917,7 +1018,7 @@ sudo apt-get install libmysqlclient-dev
 
 
 
-### 3 DNS为什么是“树状结构”
+#### 3 DNS为什么是“树状结构”
 
 DNS的域名空间本质上是一颗 “倒挂的树”。如下图所示，首先在根服务器(.)中查询.com的位置，根返回IP后，去这个IP查询0voice.com在哪，依次查询完整个www.0voice.com整个域名，然后拿到IP地址。
 
@@ -939,13 +1040,13 @@ DNS的域名空间本质上是一颗 “倒挂的树”。如下图所示，首�
 DNS编码name:  3www 60voice 3com0                       
 ```
 
-#### 哈夫曼树
+##### 哈夫曼树
 
 一种数据压缩算法，是多叉树，统计出现字符的频率，出现频率越高的越靠近根节点，这样高频字符的编码更短。
 
 **<mark>本质：优先处理最重要的分支</mark>**
 
-#### 常见应用- 各类压缩领域
+##### 常见应用- 各类压缩领域
 
 **1: 文件压缩 (ZIP)**
 
@@ -959,9 +1060,9 @@ DNS编码name:  3www 60voice 3com0
   
   
 
-### 4 项目中技术点
+#### 4 项目中技术点
 
-#### 1：strtok
+##### 1：strtok
 
 按照指定的分隔符 delim，把一个字符串拆成多个token。
 
@@ -982,7 +1083,7 @@ while (token != NULL) {
 
 
 
-#### 2 :  srtncpy
+##### 2 :  srtncpy
 
 安全复制字符串，最多复制n给字符从src到dest。
 
@@ -994,7 +1095,7 @@ strncpy(dest, src, sizeof(dest)-1);
 dest[sizeof(dest)-1] = '\0';
 ```
 
-#### 3 : srtdup
+##### 3 : srtdup
 
 复制字符串，并动态分配内存 (内部调用malloc)。
 
@@ -1006,7 +1107,7 @@ printf("%s\n", copy);  // hello
 free(copy);            // 需要手动释放！
 ```
 
-### 字符串处理函数学习
+##### 字符串处理函数学习
 
 **时间：** 贯穿整个对话
 
@@ -1022,7 +1123,7 @@ free(copy);            // 需要手动释放！
 
 * `fflush` - 缓冲区刷新
 
-#### 4 : 套接字
+##### 4 : 套接字
 
 套接字Socket是网络通信的门把手。在Linux系统中，socket是一个文件描述符，在使用如下的socket函数创建套接字后，会返回一个sockfd，后续针对这个连接的操作都通过sockfd来识别。
 
@@ -1033,7 +1134,7 @@ int sockfd = socket(AF_INET, SOCK_DGRAM, 0)
 sockfd >0表示创建成功
 ```
 
-### 5 传输方式
+#### 5 传输方式
 
 **UDP的好处，是TCP不具备的**
 
@@ -1057,7 +1158,7 @@ sockfd >0表示创建成功
   
   
 
-### 6 作业--实现异步DNS
+#### 6 作业--实现异步DNS
 
 方案1：非阻塞Socket + 轮询
 
@@ -1132,9 +1233,19 @@ void* dns_work(void *arg) {
 
 **第一步**：建立TCP连接
 
+创建套接字(af_inet, sock_stream)
+
+连接服务器connect完成tcp连接，入参sockfd, 和目的地址
+
+并将使用fcntl函数将sockfd设置为非阻塞(file control函数)
+
 **第二步**：在TCP连接的socket基础上，发送HTTP协议请求
 
-**第三步**：服务器在TCP连接socket，返回http协议的response
+构建请求内容，包括resource，HTTP版本，以及hostname和控制类型等。
+
+发送send内容
+
+**第三步**：服务器在TCP连接socket，返回http协议的response（select）
 
 ```textile
 1. www.baidu.com  --> 翻译为ip  (DNS)
@@ -1142,7 +1253,13 @@ void* dns_work(void *arg) {
 3. 发送http协议数据
 ```
 
+用fd_set类型构建fd集合，FD_ZERO将集合清零，然后给FD_SET传入sockfd和fd集合来设置要监控的fd。
 
+**第四步**：循环接受数据
+
+循环中调用select来读取，传入fd集合和最大fd数量以及超时时间。判断是否超时以及用FD_ISSET函数判断socket是否有可读数据。
+
+如果有数据就用recv接收并采用realloc动态拓展缓存
 
 ##### ① hostname转ip
 
@@ -1384,8 +1501,7 @@ int clientfd = accept(sockfd, (struct sockaddr*) &client_addr, &client_len)
 
 * * *
 
-总结
---
+##### 总结
 
 | 代码                                | 作用         | 一句话理解        |
 | --------------------------------- | ---------- | ------------ |
@@ -1434,6 +1550,8 @@ int epfd = epoll_create(1);
 
 epoll事件控制函数，对epoll实例进行增删改操作
 
+设置事件为可读时间，并把sockfd绑定进入data.fd，最后用epoll_ctl把事件event加入epoll
+
 ```c
 struct epoll_event ev;
 ev.events = EPOLLIN;
@@ -1457,6 +1575,8 @@ epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &ev);
 
 ##### 3 epoll事件循环
 
+epoll_wait持续判断sockfd中有没有事件，有事件则返回事件数量。
+
 ```c
 while (1) {
     int nready = epoll_wait(epfd, events, EPOLL_SZIE, 5);
@@ -1468,8 +1588,24 @@ while (1) {
 
 - 返回值 `nready`：就绪事件的数量（0 表示超时，-1 表示错误）
   <mark>**`nready` 是 epoll_wait 的返回值，表示“这次返回了多少个就绪的事件”。用它作为循环上限，可以保证只处理真正有事件发生的 fd，而不用遍历整个数组。**</mark>
-  
-  
+
+
+
+##### 4 for循环处理事件
+
+循环总共返回的事件个数n次，如果事件fd等于sockfd，说明是在进行新的客户端连接。否则就是在处理客户端发送的数据
+
+1 处理连接
+
+新初始化一个sockaddr_in连接地址，然后accept从监听队列中取出一个clientfd连接。取出连接后需要设置客户端fd的event事件，设置为EPOLLIN | EPOLLLET边沿触发，并把clientfd这个连接用epoll_ctl加入epoll监控。
+
+2 处理客户端数据
+
+把事件的data.fd存入clientfd，用recv从clientfd中取出数据。
+
+
+
+关键点，clientfd是由sockfd创建的，但是由epoll管理。
 
 **处理事件**
 
@@ -1576,6 +1712,12 @@ epoll_wait检测：
         其中1个4G的内存，2核CPU
 
         另外3个2g的内存，1核CPU
+
+
+
+### 百万并发服务器的实现原理
+
+
 
 
 

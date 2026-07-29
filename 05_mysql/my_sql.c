@@ -124,7 +124,7 @@ int MYSQL_write(MYSQL *handle, char *buffer, int length) {
 
     // 1. MYSQL预处理语句（向数据库申请一个语句对象）
     MYSQL_STMT *stmt = mysql_stmt_init(handle);// 创建一个语句句柄，后续所有操作都通过这个句柄管理
-        // 这这条sql上准备，相当于绑定了一个对象
+        // 这条sql上准备，相当于绑定了一个对象
     int ret = mysql_stmt_prepare(stmt, SQL_INSERT_IMG_USER, strlen(SQL_INSERT_IMG_USER));
     if(ret) {
         printf("mysql_stmt_prepare: %s\n", mysql_error(handle));

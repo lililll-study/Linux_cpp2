@@ -53,7 +53,7 @@ struct nWorker {
     struct nWorker *previous;   // 链表前驱
     struct nWorker *next;   // 链表后继
 };
-    // 1.3 线程池管理器
+    // 1.3 线程池--管理器
 typedef struct nManager {
     struct nTask *tasks;    // 任务链表头
     struct nWorker *workers;   // 工作者链表头
