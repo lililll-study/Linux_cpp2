@@ -7,7 +7,7 @@
 02_contacts/contacts01
 03_thread_count/lock
 01_countword/count
-02 高性能网络/2.1 网络编程/2.1.1-network-io/networkio
+02/2.1network/2.1.1-network-io
 
 # 通用编译中间产物与可执行文件
 *.o
@@ -31,4 +31,21 @@
 .DS_Store
 Thumbs.db
 desktop.ini
-02 高性能网络/2.1 网络编程/2.1.1-network-io/networkio
+02/2.1network/2.1.1-network-io
+/00/02_contacts/contacts
+/00/04_threadpool/threadpool
+/00/08_TCP/tcpepoll
+/00/09_cont/tcp_server
+/00/02_contacts/contacts01
+/00/02_contacts/contacts_task
+/00/01_countword/count
+/00/01_countword/count_task
+/00/05_mysql/creat_db.sql
+/00/06_dns/dns
+/00/06_dns/dns_async
+/00/07_http/http
+/00/03_thread_count/lock
+/00/05_mysql/mysql
+/00/05_mysql/mysql_image
+/00/05_mysql/sql2.sql
+/00/08_TCP/tcp
