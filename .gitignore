@@ -27,6 +27,65 @@
 *.swo
 *~
 
+# C语言编译产物
+
+# 目标文件
+*.o
+*.obj
+
+# 可执行文件
+*.exe
+*.out
+*.app
+
+# 静态库
+*.a
+*.lib
+
+# 动态库
+*.so
+*.dll
+*.dylib
+
+# 预编译头文件
+*.gch
+*.pch
+
+# 汇编文件
+*.s
+*.asm
+
+# 依赖文件
+*.d
+*.depend
+
+# 构建目录
+build/
+Build/
+release/
+Release/
+debug/
+Debug/
+dist/
+Dist/
+bin/
+Bin/
+obj/
+Obj/
+out/
+Out/
+
+# IDE相关
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Makefile产物（如果不想追踪）
+# Makefile
+# makefile
+
 # ===== 系统文件 =====
 .DS_Store
 Thumbs.db
@@ -49,3 +108,4 @@ desktop.ini
 /00/05_mysql/mysql_image
 /00/05_mysql/sql2.sql
 /00/08_TCP/tcp
+02/2.4_dpdk/dpdk-stable-19.08.2/

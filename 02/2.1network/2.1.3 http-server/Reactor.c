@@ -150,7 +150,7 @@ int recv_cb(int fd) {
     conn_list[fd].wlength = conn_list[fd].rlength;
     memcpy(conn_list[fd].wbuffer, conn_list[fd].rbuffer, conn_list[fd].wlength);
 
-#elif 0
+#elif 1
 // 接受完数据后做request请求
     http_requset(&conn_list[fd]);
 
@@ -174,7 +174,8 @@ int recv_cb(int fd) {
     return data_len;
 }
 
-
+//1 不同事件触发不同回调
+//2 rbuffer, wbuffer
 
 
 
@@ -182,7 +183,7 @@ int recv_cb(int fd) {
 
 int send_cb(int fd) {
 
-#if 0
+#if 1
 // 发送数据之前做response响应
     http_response(&conn_list[fd]);
 
