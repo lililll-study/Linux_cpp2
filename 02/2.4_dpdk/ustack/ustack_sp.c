@@ -16,10 +16,30 @@ int global_portif = 0;
 #define ENABLE_SEND 1
 #define ENABLE_TCP 1
 
+#define TCP_INIT_WINDOWS 14600
+
 #if ENABLE_TCP
 uint8_t global_flags;
 uint32_t global_seqnum;
+uint32_t global_acknum;
 
+
+typedef enum __USTACK_TCP_STATUS {
+    USTACK_TCP_STATUS_CLOSED = 0,
+    USTACK_TCP_STATUS_LISTEN,
+    USTACK_TCP_STATUS_SYN_RCVD,
+    USTACK_TCP_STATUS_SYN_SENT,
+    USTACK_TCP_STATUS_ESTABLISHED,
+    USTACK_TCP_STATUS_FIN_WAIT_1,
+    USTACK_TCP_STATUS_FIN_WAIT_2,
+    USTACK_TCP_STATUS_CLOSING,
+    USTACK_TCP_STATUS_TIMEWAIT,
+    USTACK_TCP_STATUS_CLOSE_WAIT,
+    USTACK_TCP_STATUS_LAST_ACK
+    
+} USTACK_TCP_STATUS;
+
+uint8_t tcp_status = USTACK_TCP_STATUS_LISTEN;
 #endif
 
 
@@ -188,7 +208,7 @@ static int ustack_encode_tcp_pkt(uint8_t *msg, uint16_t total_len) {
     tcp->data_off = 0x50;
     tcp->tcp_flags =  RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG; //0x1 << 1; //syn位
    
-    tcp->rx_win = htons(4096);
+    tcp->rx_win = TCP_INIT_WINDOWS;//htons(4096);
     tcp->cksum = 0;
     tcp->cksum = rte_ipv4_udptcp_cksum(ip, tcp);
 
@@ -315,24 +335,48 @@ int main(int argc, char *argv[]) {
 #if ENABLE_TCP
                 global_flags = tcphdr->tcp_flags;
                 global_seqnum = ntohl(tcphdr->sent_seq);
+                global_acknum = ntohl(tcphdr->recv_ack);
 
                 struct in_addr addr;
                 addr.s_addr = iphdr->src_addr;
                 printf("sip %s:%d, ", inet_ntoa(addr), ntohs(tcphdr->src_port));
                 addr.s_addr = iphdr->dst_addr;
-                printf("dip %s:%d, flags: %x, seqnum: %d\n", inet_ntoa(addr), ntohs(tcphdr->dst_port), global_flags, ntohl(global_seqnum));
+                printf("dip %s:%d, flags: %x, seqnum: %d, acknum: %d\n", 
+                        inet_ntoa(addr), ntohs(tcphdr->dst_port), global_flags, global_seqnum, global_acknum);
+
+                // 状态机实现TCP连接建立
+                if (global_flags & RTE_TCP_SYN_FLAG) {
+
+                    if (tcp_status == USTACK_TCP_STATUS_LISTEN) {
+                        uint16_t total_len = sizeof(struct rte_tcp_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_ether_hdr);
+
+                        struct rte_mbuf *mbuf = rte_pktmbuf_alloc(mbuf_pool);
+                        if (!mbuf) rte_exit(EXIT_FAILURE, "ERROR rte_pktmbuf_alloc\n");
+                        mbuf->pkt_len = total_len;
+                        mbuf->data_len = total_len;
+
+                        uint8_t *msg = rte_pktmbuf_mtod(mbuf, uint8_t *);
+                        ustack_encode_tcp_pkt(msg, total_len);
+
+                        rte_eth_tx_burst(global_portif, 0, &mbuf, 1);
+                        tcp_status = USTACK_TCP_STATUS_SYN_RCVD;
+                    }
+
+                }
+                if (global_flags & RTE_TCP_ACK_FLAG) {
+                    if (tcp_status == USTACK_TCP_STATUS_SYN_RCVD) {
+                        tcp_status = USTACK_TCP_STATUS_ESTABLISHED;
+                    }
+                }
+                if (global_flags & RTE_TCP_PSH_FLAG) {
+                    if (tcp_status == USTACK_TCP_STATUS_ESTABLISHED) {
+                        
+                        uint8_t hdrlen = (tcphdr->data_off >> 4) * sizeof(uint32_t);
+                        uint8_t *data = ((uint8_t*)tcphdr + hdrlen);
+                        printf("tcp data: %s\n", data);
+                    }
+                }
 #endif
-                uint16_t total_len = sizeof(struct rte_tcp_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_ether_hdr);
-
-                struct rte_mbuf *mbuf = rte_pktmbuf_alloc(mbuf_pool);
-                if (!mbuf) rte_exit(EXIT_FAILURE, "ERROR rte_pktmbuf_alloc\n");
-                mbuf->pkt_len = total_len;
-                mbuf->data_len = total_len;
-
-                uint8_t *msg = rte_pktmbuf_mtod(mbuf, uint8_t *);
-                ustack_encode_tcp_pkt(msg, total_len);
-
-                rte_eth_tx_burst(global_portif, 0, &mbuf, 1);
             }
             
             // 释放mbuf

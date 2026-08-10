@@ -2,10 +2,10 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = ustack_sp
+APP = tcp
 
 # all source are stored in SRCS-y
-SRCS-y := ustack_sp.c
+SRCS-y := tcp.c
 
 # Build using pkg-config variables if possible
 ifeq ($(shell pkg-config --exists libdpdk && echo 0),0)
