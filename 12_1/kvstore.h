@@ -1,0 +1,107 @@
+#ifndef __KV_STORE_H__
+#define __KV_STORE_H__
+
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+
+#define NET_REACTOR 0
+#define NET_NTYCO 1
+#define NET_PROACTOR 2
+
+#define NET_SELECT NET_REACTOR
+
+#define KVS_MAX_TOKENS 128
+
+
+#define ENABLE_ARRAY 1
+#define ENABLE_RBTREE 1
+
+
+typedef int (*msg_handler)(char *msg, int length, char *response);
+
+extern int reactor_start(unsigned short port, msg_handler handler);
+extern int ntyco_start(unsigned short port, msg_handler handler);
+extern int proactor_start(unsigned short port, msg_handler handler);
+
+
+
+
+
+extern  const char *command[];
+extern const char *response[];
+
+
+
+#if ENABLE_ARRAY
+// 单个key
+typedef struct kvs_array_item_s {
+    char *key;
+    char *value;
+} kvs_array_item_t;
+
+#define KVS_ARRAY_SIZE 1024
+
+// 定义所有key
+typedef struct kvs_array_s {
+    kvs_array_item_t *table;
+    int idx;
+    int total;
+} kvs_array_t;
+
+void kvs_array_destory(kvs_array_t *inst);
+int kvs_array_create(kvs_array_t *inst);
+int kvs_array_set(kvs_array_t *inst, char *key, char *value);
+char *kvs_array_get(kvs_array_t *inst, char *key);
+int kvs_array_del(kvs_array_t *inst, char *key);
+int kvs_array_mod(kvs_array_t *inst, char *key, char *value);
+int kvs_array_exist(kvs_array_t *inst, char *key);
+#endif
+
+#if ENABLE_RBTREE
+
+#define RED				1
+#define BLACK 			2
+#define ENABLE_KEY_CHAR 1
+
+#if ENABLE_KEY_CHAR
+typedef char* KEY_TYPE;
+#else
+typedef int KEY_TYPE;
+#endif
+
+
+typedef struct _rbtree_node {
+	unsigned char color;
+	struct _rbtree_node *right;
+	struct _rbtree_node *left;
+	struct _rbtree_node *parent;
+	KEY_TYPE key;
+	void *value;
+} rbtree_node;
+
+typedef struct _rbtree {
+	rbtree_node *root;
+	rbtree_node *nil;
+} rbtree;
+
+
+typedef struct _rbtree kvs_rbtree_t;
+int kvs_rbtree_create(kvs_rbtree_t *inst);
+void kvs_rbtree_destory(kvs_rbtree_t *inst) ;
+int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value) ;
+char *kvs_rbtree_get(kvs_rbtree_t *inst, char *key);
+int kvs_rbtree_del(kvs_rbtree_t *inst, char *key) ;
+int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value) ;
+int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key) ;
+#endif
+
+
+
+void kvs_free(void *ptr);
+void *kvs_malloc (size_t size);
+
+
+#endif
