@@ -530,6 +530,8 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key) {
 
 	rbtree_node *node = rbtree_search(inst, key);
 	// if (!node) return 1;
+	// 如果查找的节点在红黑树中不存在，则返回1（检查 node 是否等于哨兵节点）
+	// 因为 node 是 T->nil，不是 NULL
 	if (node == inst->nil) return 1;
 
 	return 0;

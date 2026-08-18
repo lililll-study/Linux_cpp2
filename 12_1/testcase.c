@@ -41,7 +41,7 @@ void testcase(int connfd, char *msg, char *pattern, char *casename) {
 
     // 比对result和pattern是否一致
     if (strcmp(result, pattern) == 0) {
-        // printf("==> PASS -> %s\n", casename);
+        printf("==> PASS -> %s\n", casename);
     } else {
         printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, pattern);
     }
@@ -65,8 +65,8 @@ int connect_tcpserver(const char *ip, unsigned short port) {
     return connfd;
 }
 
-void array_testcase_10w (int connfd) {
-    int count = 1000;
+void array_testcase_1w (int connfd) {
+    int count = 10000;
     int i = 0;
     struct timeval tv_begin;
 	gettimeofday(&tv_begin, NULL);
@@ -86,7 +86,7 @@ void array_testcase_10w (int connfd) {
     gettimeofday(&tv_cur, NULL);
 
     int time_used = TIME_SUB_MS(tv_cur, tv_begin); //ms
-    printf("array_testcase -- > time used: %d, qps: %d\n", time_used, 9000 * 1000 / time_used);
+    printf("array_testcase -- > time used: %d, qps: %d\n", time_used, 9* count * 1000 / time_used);
 }
 
 void rbtree_testcase (int connfd) {
@@ -103,8 +103,21 @@ void rbtree_testcase (int connfd) {
 
 }
 
-void rbtree_testcase_10w (int connfd) {
-    int count = 1000;
+void hash_testcase (int connfd) {
+    
+    testcase(connfd, "HSET Teacher LHY",     "ok\r\n", "HSET-Teacher");
+    testcase(connfd, "HGET Teacher",          "LHY\r\n", "HGET-Teacher");
+    testcase(connfd, "HMOD Teacher Lililihy", "ok\r\n", "HMOD-Teacher");
+    testcase(connfd, "HGET Teacher",          "Lililihy\r\n", "HGET-Teacher");
+    testcase(connfd, "HEXIST Teacher",        "exist\r\n", "HEXIST-Teacher");
+    testcase(connfd, "HDEL Teacher",         "ok\r\n", "HDEL-Teacher");
+    testcase(connfd, "HGET Teacher",          "no exist\r\n", "HGET-Teacher");
+    testcase(connfd, "HMOD Teacher lhy",     "no exist\r\n", "HMOD-Teacher");
+    testcase(connfd, "HEXIST Teacher",        "no exist\r\n", "HEXIST-Teacher");
+
+}
+void rbtree_testcase_1w (int connfd) {
+    int count = 10000;
     int i = 0;
     struct timeval tv_begin;
 	gettimeofday(&tv_begin, NULL);
@@ -124,26 +137,76 @@ void rbtree_testcase_10w (int connfd) {
     gettimeofday(&tv_cur, NULL);
 
     int time_used = TIME_SUB_MS(tv_cur, tv_begin); //ms
-    // printf("array_testcase -- > time used: %d, qps: %d\n", time_used, 9000 * 1000 / time_used);
+    printf("rbtree_testcase_1w -- > time used: %d, qps: %d\n", time_used, count * 9 * 1000 / time_used);
+}
+
+void rbtree_testcase_3w_0_mix (int connfd) {
+    int count = 10000;
+    int i = 0;
+    struct timeval tv_begin;
+	gettimeofday(&tv_begin, NULL);
+
+    for (i = 0; i< count; i++) {
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RSET Teacher%d King%d", i, i);
+        testcase(connfd, cmd,     "ok\r\n", "RSET-Teacher");
+    }
+    for (i = 0; i< count; i++) {
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RGET Teacher%d", i);
+
+        char result[128] = {0};
+        snprintf(result, 128, "King%d\r\n", i);
+        testcase(connfd, cmd,     result, "RGET-Teacher");
+    }
+    for (i = 0; i< count; i++) {
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RMOD Teacher%d Lililihy%d", i, i);
+        testcase(connfd, cmd,     "ok\r\n", "RMOD-Teacher");
+    }
+
+        // testcase(connfd, "RMOD Teacher Lililihy", "ok\r\n", "RMOD-Teacher");
+        // testcase(connfd, "RGET Teacher",          "Lililihy\r\n", "RGET-Teacher");
+        // testcase(connfd, "REXIST Teacher",        "exist\r\n", "REXIST-Teacher");
+        // testcase(connfd, "RDEL Teacher",         "ok\r\n", "RDEL-Teacher");
+        // testcase(connfd, "RGET Teacher",          "no exist\r\n", "RGET-Teacher");
+        // testcase(connfd, "RMOD Teacher lhy",     "no exist\r\n", "RMOD-Teacher");
+        // testcase(connfd, "REXIST Teacher",        "no exist\r\n", "REXIST-Teacher");
+
+
+
+    struct timeval tv_cur;
+    gettimeofday(&tv_cur, NULL);
+
+    int time_used = TIME_SUB_MS(tv_cur, tv_begin); //ms
+    printf("rbtree_testcase_1w -- > time used: %d, qps: %d\n", time_used, count * 3 * 1000 / time_used);
 }
 
 // testcase 192.168.137.128 2000
 int main(int argc, char *argv[]) {
 
-    if (argc != 3) {
+    if (argc != 4) {
          printf("argc error\n");
          return -1;
     }
 
     char *ip = argv[1];
     int port = atoi(argv[2]);
-
+    int mode = atoi(argv[3]);
     int connfd = connect_tcpserver(ip, port);
 
     // rbtree_testcase(connfd);
-    // rbtree_testcase_10w(connfd);
-    // 90w次往返数据
-    array_testcase_10w(connfd);
+    
+    // 9w次往返数据
+    if (mode == 0) {
+        rbtree_testcase_1w(connfd);
+    } else if (mode ==1) {
+        array_testcase_1w(connfd);
+    } else if (mode ==2) {
+        rbtree_testcase_3w_0_mix(connfd);
+    } else if (mode == 3) {
+        hash_testcase(connfd);
+    }
 
     
     return 0;
